@@ -19,16 +19,27 @@ import (
 	"github.com/denhac/prusa-connect-local-bot/internal/secret"
 )
 
+// The defaults module.yaml also declares, used when a value arrives empty.
+const (
+	DefaultServerURL     = "http://127.0.0.1:8080"
+	DefaultAdminUsername = "slackbot"
+)
+
 // ErrInvalid is a value the module cannot use. The message names the key,
 // because the operator reads it on the instance.
 var ErrInvalid = errors.New("settings: invalid value")
 
 // Sent is what the host sends. The JSON names are the keys in module.yaml.
 type Sent struct {
-	SlackBotToken secret.Secret `json:"slack_bot_token"`
-	SlackAppToken secret.Secret `json:"slack_app_token"`
-	StatusChannel string        `json:"status_channel"`
-	AllowGuests   bool          `json:"allow_guests"`
+	SlackBotToken secret.Secret     `json:"slack_bot_token"`
+	SlackAppToken secret.Secret     `json:"slack_app_token"`
+	StatusChannel string            `json:"status_channel"`
+	AllowGuests   bool              `json:"allow_guests"`
+	Cameras       map[string]string `json:"cameras"`
+	IssueReasons  []string          `json:"issue_reasons"`
+	ServerURL     string            `json:"server_url"`
+	AdminUsername string            `json:"admin_username"`
+	AdminPassword secret.Secret     `json:"admin_password"`
 }
 
 // Values are the settings once checked.
@@ -41,6 +52,19 @@ type Values struct {
 	StatusChannel string
 	// AllowGuests lets Slack guest accounts use the command.
 	AllowGuests bool
+	// Cameras is each printer's Pi camera still address, by printer id.
+	// internal/camera checks the addresses when the module starts.
+	Cameras map[string]string
+	// IssueReasons are the server's issue reasons that mean a printer needs
+	// a person.
+	IssueReasons []string
+	// ServerURL is where the bot signs in to the server's HTTP API.
+	// internal/serverhttp checks it when the module starts.
+	ServerURL string
+	// AdminUsername and AdminPassword are the bot's own account. With no
+	// password, everything that needs a sign-in stays off.
+	AdminUsername string
+	AdminPassword secret.Secret
 }
 
 // channelID is the shape of a Slack channel ID: C for a channel, G for an old
@@ -62,6 +86,28 @@ func Read(sent Sent) (Values, error) {
 	if sent.StatusChannel != "" && !channelID.MatchString(sent.StatusChannel) {
 		return Values{}, fmt.Errorf("%w: status_channel is %q, and a channel ID looks like C0123ABCD. "+
 			"It is at the bottom of the channel's details in Slack", ErrInvalid, sent.StatusChannel)
+	}
+
+	for device, address := range sent.Cameras {
+		if device == "" || address == "" {
+			return Values{}, fmt.Errorf("%w: cameras maps a printer id to a still address, "+
+				"such as {\"<printer id>\": \"http://<Pi LAN address>:8555/v1/cameras/cam0/still\"}", ErrInvalid)
+		}
+	}
+
+	for _, reason := range sent.IssueReasons {
+		if reason == "" || strings.ContainsAny(reason, " \t") {
+			return Values{}, fmt.Errorf("%w: issue_reasons holds %q, and a reason is one word such as awaiting_operator",
+				ErrInvalid, reason)
+		}
+	}
+
+	if sent.ServerURL == "" {
+		sent.ServerURL = DefaultServerURL
+	}
+
+	if sent.AdminUsername == "" {
+		sent.AdminUsername = DefaultAdminUsername
 	}
 
 	return Values(sent), nil

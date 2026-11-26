@@ -265,7 +265,7 @@ Each was read in the source or checked live on 2026-11-25.
 | `internal/slack` | Socket Mode, the Web API, Block Kit, modals, rate limits, file upload, profile lookups | the SDK, the server, denhac |
 | `internal/verify` | denhac's Slack fields (by label), the member page and how to read it, what "qualifies" means | Slack's client (through `Directory`), Connect |
 | `internal/connect` | the SDK's `deviceapi`, `busapi`, `accessapi`, `routesapi` and payloads | Slack, the auth API |
-| `internal/accounts` | `/api/v1/auth/login`, `/logout`, `/accounts…`, problem documents, the bearer session | Slack, the SDK |
+| `internal/serverhttp` | the server's HTTP API as `slackbot`: `/api/v1/auth/login` and `/logout`, the bearer session, `/api/v1/cameras…`, and in phase 2 `/accounts…`, problem documents | Slack, the SDK |
 | `internal/camera` | the Pi camera API v1 | Slack, the server |
 | `internal/store` | the state file, the journal, atomic writes, the schema number | everything else |
 | `internal/settings` | option keys, types, validation | how they are used |
@@ -336,8 +336,10 @@ One `errgroup`, cancelled by `plugin.shutdown`, SIGTERM or SIGINT.
 | account writer | **the only code that changes accounts.** It works through the journal one entry at a time |
 | sweep | every `sweep_interval`, it queues a check of each member |
 
-**On shutdown:** flush the state file (it is written on every change anyway), post
-"stopping" within at most 2 s, and return. All of it fits in the host's 5 s.
+**On shutdown:** flush the state file (it is written on every change anyway), close the
+Slack connection within at most 2 s, and return. All of it fits in the host's 5 s.
+There is no "stopping" message: a settings edit restarts the module, so it would post
+on every edit. The start message after a gap says the same, and only when it matters.
 
 ## Slack
 
@@ -394,8 +396,13 @@ who may run it and its help text. `help` and a completeness test come from it.
 | the printer drops off **mid-print** | "MK4S-1 went offline during a print" / "is back" | only while a job is open, after 2 min |
 | the module started | "Bot 0.1.0 started on prusa-connect 0.1.0-beta.2. Not running from 14:02 to 14:31" | only after a gap of more than 2 min or a version change. A settings edit restarts the module silently |
 
-Rules live in `internal/domain/notify.go` as a table: signal, filter, delay, template.
-`notify` in the settings switches each one on or off.
+The rules live in `internal/domain/notify.go`, a reducer that does no I/O: events, fleet
+snapshots and the clock go in, and posts, replies and updates come out. The setting
+`issue_reasons` (default `["awaiting_operator"]`) says which issue reasons mean "needs a
+person". A per-signal on/off switch is left out until someone asks for one.
+
+**Until phase 2 checks membership,** `status`, `jobs` and `snap` answer only when typed in
+#bots. Only members can see that channel.
 
 ### Rebuild (D6)
 
@@ -709,14 +716,31 @@ reacts to Slack, and it sends nobody a message.
 
 ## Camera stills
 
-- The `cameras` setting maps a printer to a still address, such as
-  `{"<printer id>": "http://<Pi LAN address>:8555/v1/cameras/cam0/still"}`.
+The user chose the server's own cameras as the source (2026-11-25), with a printer's Pi
+as an optional override.
+
+**From the server (the default):**
+- `internal/serverhttp` signs in as `slackbot` and reads `GET /api/v1/cameras`. Each
+  camera's `device_id` says which printer it watches, so nothing is configured per
+  printer. The list is read again every 5 minutes, and at once after a 404.
+- A picture is `GET /api/v1/cameras/{camera}/snapshot`, the newest frame the camera's Pi
+  pushed, normally at most about 15 s old.
+- **Its limits:**
+  - There is no fresher one to wait for.
+  - A picture more than 10 minutes old is not posted. Live view pauses the pushes,
+    and the bot says the camera has no recent picture.
+  - A 204 means no picture yet.
+  - With no `admin_password`, this source is off.
+
+**From a Pi (an override, per printer):**
+- The `cameras` setting maps a printer to its Pi's still address, such as
+  `{"<printer id>": "http://<Pi LAN address>:8555/v1/cameras/cam0/still"}`. That Pi
+  is then asked first, and the server is asked if it fails.
+- `snap` asks with `wait=10&max_age=30`, so it gets a fresh picture, and a print's end
+  asks with `max_age=60`.
 - **The guard is applied when the connection is made,** in `net.Dialer.Control`:
   private addresses only, never `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, no redirects,
   at most 8 MiB, and a 15 s timeout.
-- `snap` asks with `wait=10&max_age=30`, and a print's end with `max_age=60`. A 503
-  means "live view is on": `snap` says so, and the event message goes without a
-  picture.
 
 ## The manifest (sketch)
 

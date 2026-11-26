@@ -29,10 +29,13 @@ var allowed = map[string][]string{
 // stdlibOnly are packages that may import nothing outside the standard
 // library and this module's own packages named here.
 var stdlibOnly = map[string][]string{
-	"internal/domain":   {},
-	"internal/secret":   {},
-	"internal/settings": {"internal/secret"},
-	"internal/routes":   {"internal/domain"},
+	"internal/domain":     {},
+	"internal/secret":     {},
+	"internal/settings":   {"internal/secret"},
+	"internal/routes":     {"internal/domain"},
+	"internal/camera":     {"internal/domain"},
+	"internal/store":      {"internal/domain"},
+	"internal/serverhttp": {"internal/domain", "internal/secret"},
 }
 
 func TestImports(t *testing.T) {

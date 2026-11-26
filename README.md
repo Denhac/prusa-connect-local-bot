@@ -15,8 +15,9 @@ What it does, when finished:
 [`docs/design.md`](docs/design.md) is the design. [`docs/compat.md`](docs/compat.md)
 lists what the module relies on from the server, Slack and the Pi cameras.
 
-**Status: phase 0.** The module runs under the server, takes its settings, connects to
-Slack, and answers `/prusaconnect help` and `/prusaconnect bot`.
+**Status: phase 1.** The module posts print starts and ends (with a camera still),
+printers waiting for a person, and printers that drop off mid-print to #bots. It answers
+`/prusaconnect help`, `bot`, and, in #bots, `status`, `jobs` and `snap`.
 
 ## Building
 
@@ -75,6 +76,11 @@ the module runs idle and lists what is missing, in `/prusaconnect bot` and at `G
 | `slack_app_token` | the Slack app's app-level token for Socket Mode, `xapp-…` (secret) |
 | `status_channel` | the channel ID of #bots, such as `C0123ABCD` |
 | `allow_guests` | whether Slack guest accounts may use the command (default `false`) |
+| `server_url` | where the bot signs in to the server's API (default `http://127.0.0.1:8080`). Plain http only to loopback; never a Tailscale address |
+| `admin_username` | the bot's own account on the server (default `slackbot`) |
+| `admin_password` | that account's password (secret). Camera stills from the server need it |
+| `cameras` | optional: a printer's own Pi camera still address, by printer id, used before the server's camera and letting `snap` wait for a fresh picture: `{"<printer id>": "http://<Pi LAN address>:8555/v1/cameras/cam0/still"}`. LAN addresses only |
+| `issue_reasons` | the server's issue reasons that mean a printer needs a person (default `["awaiting_operator"]`) |
 
 [`docs/slack-app.md`](docs/slack-app.md) says how to set up the Slack app and where
 each token comes from.
@@ -87,7 +93,10 @@ each token comes from.
 | `internal/app` | builds the parts and runs them under the server's wire |
 | `internal/domain` | what the bot does: commands, messages, health. Standard library only |
 | `internal/slack` | Socket Mode, the Web API and Block Kit. The only package using slack-go |
-| `internal/connect` | the server, through its SDK |
+| `internal/connect` | the server, through its SDK: the fleet, jobs and the event stream |
+| `internal/camera` | stills from the Pi camera API (the optional override) |
+| `internal/serverhttp` | the server's HTTP API, signed in as the bot's account: camera stills now, accounts in phase 2 |
+| `internal/store` | the state file in the module's data directory |
 | `internal/routes` | the module's HTTP routes on the server (`GET /status`) |
 | `internal/settings` | the settings and their checks |
 | `internal/secret` | a credential type that never prints its value |

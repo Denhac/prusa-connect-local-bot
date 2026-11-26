@@ -1,0 +1,29 @@
+{
+ "specversion": "1.0",
+ "id": "01EXAMPLE0009",
+ "source": "urn:prusa:site:local/device/0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+ "type": "com.prusa.connect.device.record.changed",
+ "time": "2026-11-25T19:00:09Z",
+ "subject": "device:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+ "sequence": "00000000000000000009",
+ "epoch": "01EXAMPLEEPOCH",
+ "hops": 0,
+ "evclass": "state",
+ "data": {
+  "device_id": "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+  "name": "MK4S-1",
+  "driver": "prusa",
+  "vendor": "Prusa",
+  "model": "MK4S",
+  "serial": "",
+  "unit_uid": "",
+  "firmware": "6.4.0",
+  "departure": "",
+  "connected": true,
+  "last_seen": "2026-11-25T19:00:09Z",
+  "tags": [],
+  "changed": [
+   "name"
+  ]
+ }
+}

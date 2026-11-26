@@ -20,6 +20,20 @@ type noFleet struct{}
 
 func (noFleet) Printers(context.Context) ([]domain.Printer, error) { return nil, nil }
 
+func (noFleet) Jobs(context.Context, string) (*domain.Job, *domain.Job, error) { return nil, nil, nil }
+
+func (noFleet) History(context.Context, string, time.Time, int) ([]domain.Job, error) {
+	return nil, nil
+}
+
+type noEvents struct{}
+
+func (noEvents) Run(ctx context.Context, _ func(context.Context, []domain.Event, bool)) error {
+	<-ctx.Done()
+
+	return nil
+}
+
 // host plays the server's side of the wire against a module, over a pipe.
 func host(t *testing.T) (*wirerpc.Conn, *module) {
 	t.Helper()
@@ -33,7 +47,7 @@ func host(t *testing.T) (*wirerpc.Conn, *module) {
 	t.Cleanup(cancel)
 
 	hostSide, childSide := net.Pipe()
-	m := newModule(slog.New(slog.DiscardHandler), openAPI, noFleet{}, time.Now)
+	m := newModule(slog.New(slog.DiscardHandler), openAPI, noFleet{}, noEvents{}, time.Now)
 
 	child, err := wirerpc.NewConn(childSide, wirerpc.Options{Role: wirerpc.RoleChild, Methods: m.methods()})
 	if err != nil {

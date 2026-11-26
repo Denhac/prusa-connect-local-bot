@@ -1,0 +1,27 @@
+{
+ "specversion": "1.0",
+ "id": "01EXAMPLE0002",
+ "source": "urn:prusa:site:local/device/0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+ "type": "com.prusa.connect.device.job.settled",
+ "time": "2026-11-25T19:00:02Z",
+ "subject": "device:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+ "sequence": "00000000000000000002",
+ "epoch": "01EXAMPLEEPOCH",
+ "hops": 0,
+ "evclass": "state",
+ "data": {
+  "job_id": "0193a1b2-0000-7000-8000-000000000001",
+  "device_job_id": "42",
+  "path": "/usb/bracket.bgcode",
+  "display_name": "bracket.bgcode",
+  "started": "2026-11-25T19:00:00Z",
+  "ended": "2026-11-25T21:04:00Z",
+  "outcome": "finished",
+  "machine_state": "FINISHED",
+  "progress": 100,
+  "time_printing_s": 7440,
+  "time_printing_known": true,
+  "filament_used_mm": 10250.5,
+  "filament_used_known": true
+ }
+}

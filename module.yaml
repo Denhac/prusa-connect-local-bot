@@ -16,7 +16,7 @@ title: Slack bot
 summary: Posts printer status to Slack, and lets denhac members manage their account with /prusaconnect.
 codeowner: denhac
 kind: sink
-version: 0.1.0
+version: 0.2.1
 license: MIT
 contract_major: 1
 openapi: openapi.json
@@ -25,14 +25,17 @@ openapi: openapi.json
 require:
   core: ">=0.1.0-beta.2 <0.2.0"
   core-device.list: "*"
+  core-device.jobs: "*"
+  core-device.job_history: "*"
+  core-bus.subscribe: "*"
 
-# What the module does as itself: it reads the printers, for the bot command
-# now and for status messages next.
+# What the module does as itself: it reads the printers and follows their
+# events, for the status messages and the status, jobs and bot commands.
 permissions:
   - observe
 
 needs:
-  # Where the module keeps its state file (from phase 1).
+  # Where the module keeps its state file, state.json.
   data: true
 
 # Every connection outside the server.
@@ -45,6 +48,11 @@ egress:
     from: process
     why: The Socket Mode WebSocket, and answers to commands through response_url.
     sends: Acknowledgements and command answers.
+  - option: server_url
+    ports: [8080]
+    from: process
+    why: Signs in as the bot's own account, to read camera pictures from the server.
+    sends: The bot account's name and password, then requests for camera pictures.
 
 # Every setting is optional: a required one left empty would make the server
 # refuse the install. The module runs idle and lists what is missing instead.
@@ -65,6 +73,26 @@ options:
     type: bool
     default: "false"
     summary: Whether Slack guest accounts may use /prusaconnect.
+  - key: cameras
+    type: object
+    default: "{}"
+    summary: Each printer's Pi camera still address, by printer id, such as {"<printer id>":"http://<Pi LAN address>:8555/v1/cameras/cam0/still"}. LAN addresses only.
+  - key: issue_reasons
+    type: list
+    default: '["awaiting_operator"]'
+    summary: The server's issue reasons that mean a printer needs a person, posted to the status channel.
+  - key: server_url
+    type: url
+    default: "http://127.0.0.1:8080"
+    summary: Where the bot signs in to the server's API. Plain http only to loopback, and never a Tailscale address.
+  - key: admin_username
+    type: string
+    default: "slackbot"
+    summary: The bot's own account on the server.
+  - key: admin_password
+    type: secret
+    default: ""
+    summary: That account's password. Empty turns off what needs a sign-in, such as camera stills from the server.
 
 platforms:
   - linux_arm64

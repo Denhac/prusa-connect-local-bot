@@ -25,18 +25,21 @@ import (
 	"github.com/prusa3d/prusa-connect/sdk/wire"
 	"github.com/prusa3d/prusa-connect/sdk/wirerpc"
 
+	"github.com/denhac/prusa-connect-local-bot/internal/camera"
 	"github.com/denhac/prusa-connect-local-bot/internal/connect"
 	"github.com/denhac/prusa-connect-local-bot/internal/domain"
 	"github.com/denhac/prusa-connect-local-bot/internal/routes"
+	"github.com/denhac/prusa-connect-local-bot/internal/serverhttp"
 	"github.com/denhac/prusa-connect-local-bot/internal/settings"
 	slackbot "github.com/denhac/prusa-connect-local-bot/internal/slack"
+	"github.com/denhac/prusa-connect-local-bot/internal/store"
 )
 
 // What the module reports to the host. Name is the manifest's name, and the
 // version is the manifest's version: manifest_test.go holds them together.
 const (
 	Name    = "slack-bot"
-	Version = extension.Version("0.1.0")
+	Version = extension.Version("0.2.1")
 )
 
 // sdkModule is the SDK's Go module path, read back from the build information.
@@ -93,7 +96,7 @@ func Run(openAPI []byte) error {
 		return fmt.Errorf("build the session: %w", err)
 	}
 
-	m := newModule(log, openAPI, connect.NewFleet(deviceapi.NewClient(conn)), time.Now)
+	m := newModule(log, openAPI, connect.NewFleet(deviceapi.NewClient(conn)), connect.NewEvents(conn, log), time.Now)
 	maps.Copy(serves, m.methods())
 
 	log.Info("serving on stdio", "version", Version, "sdk", sdkVersion(), "pid", os.Getpid())
@@ -115,6 +118,7 @@ type module struct {
 	log     *slog.Logger
 	openAPI []byte
 	fleet   domain.Fleet
+	events  domain.Events
 	now     func() time.Time
 	started time.Time
 
@@ -122,12 +126,15 @@ type module struct {
 	configured bool
 	values     settings.Values
 	slack      *slackbot.Runner
+	notify     *notifyLoop
+	notifyOff  string
+	session    *serverhttp.Session
 	cancel     context.CancelFunc
 	done       chan struct{}
 }
 
-func newModule(log *slog.Logger, openAPI []byte, fleet domain.Fleet, now func() time.Time) *module {
-	return &module{log: log, openAPI: openAPI, fleet: fleet, now: now, started: now()}
+func newModule(log *slog.Logger, openAPI []byte, fleet domain.Fleet, events domain.Events, now func() time.Time) *module {
+	return &module{log: log, openAPI: openAPI, fleet: fleet, events: events, now: now, started: now()}
 }
 
 // methods is what the module answers on the wire.
@@ -182,28 +189,100 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 		m.log.Warn("settings are missing; the parts that need them stay off", "missing", missing)
 	}
 
+	session, err := serverhttp.New(values.ServerURL, values.AdminUsername, values.AdminPassword, m.now)
+	if err != nil {
+		return fmt.Errorf("server_url: %w", err)
+	}
+
+	m.session = session
+
+	var sources domain.CombinedStills
+
+	if len(values.Cameras) > 0 {
+		cameras, err := camera.New(values.Cameras)
+		if err != nil {
+			return fmt.Errorf("cameras: %w", err)
+		}
+
+		sources.Pi = cameras
+	}
+
+	if !values.AdminPassword.Empty() {
+		sources.Server = serverhttp.NewCameras(session, m.now)
+	}
+
+	var stills domain.Stills
+	if sources.Pi != nil || sources.Server != nil {
+		stills = sources
+	}
+
 	if !values.SlackReady() {
+		m.notifyOff = "the Slack tokens are not set"
+
 		return nil
 	}
 
-	runner := slackbot.New(slackbot.Config{
+	slackConfig := slackbot.Config{
 		BotToken:    values.SlackBotToken,
 		AppToken:    values.SlackAppToken,
 		AllowGuests: values.AllowGuests,
-	}, domain.NewBot(m.fleet, m.health, m.now), m.log, m.now)
+	}
+	poster := slackbot.NewPoster(slackConfig, m.log, m.now)
 
-	// The connection outlives this call and ends when the module stops.
+	bot := domain.NewBot(domain.BotConfig{
+		Fleet: m.fleet, Stills: stills, Chat: poster, Health: m.health, Now: m.now,
+		StatusChannel: values.StatusChannel,
+	})
+	runner := slackbot.New(slackConfig, bot, m.log, m.now)
+
+	m.notify, m.notifyOff = m.newNotify(values, grants, poster, stills)
+
+	// The connections outlive this call and end when the module stops.
 	background, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	m.slack, m.cancel, m.done = runner, cancel, done
 
-	go func() {
-		defer close(done)
+	var wg sync.WaitGroup
 
-		_ = runner.Run(background) // Run logs its own end.
+	wg.Go(func() { _ = runner.Run(background) }) // Run logs its own end.
+
+	if m.notify != nil {
+		wg.Go(func() { m.notify.run(background) })
+	}
+
+	go func() {
+		wg.Wait()
+		close(done)
 	}()
 
 	return nil
+}
+
+// newNotify builds the status-message loop, or says why it stays off.
+func (m *module) newNotify(
+	values settings.Values, grants wirerpc.Grants, chat domain.Chat, stills domain.Stills,
+) (*notifyLoop, string) {
+	switch {
+	case values.StatusChannel == "":
+		return nil, "status_channel is not set"
+	case grants.Data == "":
+		return nil, "the server granted no data directory; approve the module's data request"
+	}
+
+	s, state, err := store.Open(grants.Data)
+	if err != nil {
+		m.log.Error("cannot read the state file; status messages stay off", "error", err)
+
+		return nil, "the state file cannot be read: " + err.Error()
+	}
+
+	cfg := domain.DefaultNotifyConfig()
+	if len(values.IssueReasons) > 0 {
+		cfg.IssueReasons = values.IssueReasons
+	}
+
+	return newNotifyLoop(m.log, s, state, cfg, m.fleet, m.events, chat, stills,
+		values.StatusChannel, string(Version), m.now), ""
 }
 
 // health is how the module is doing, for GET /status and the bot command.
@@ -222,6 +301,12 @@ func (m *module) health() domain.Health {
 		h.Slack = m.slack.Status()
 	}
 
+	if m.notify != nil {
+		h.Notify = m.notify.Status()
+	} else {
+		h.Notify.Detail = m.notifyOff
+	}
+
 	if m.configured {
 		h.Missing = m.values.Missing()
 	}
@@ -233,9 +318,15 @@ func (m *module) health() domain.Health {
 // whichever of plugin.shutdown, a signal and the end of the wire comes first.
 func (m *module) stop() {
 	m.mu.Lock()
-	cancel, done := m.cancel, m.done
-	m.cancel = nil
+	cancel, done, session := m.cancel, m.done, m.session
+	m.cancel, m.session = nil, nil
 	m.mu.Unlock()
+
+	if session != nil {
+		ctx, end := context.WithTimeout(context.Background(), time.Second)
+		session.Close(ctx) // sign out, so the server holds no session for a stopped module
+		end()
+	}
 
 	if cancel == nil {
 		return

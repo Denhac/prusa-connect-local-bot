@@ -89,6 +89,10 @@ func TestOptionsMatchSettings(t *testing.T) {
 			read[key] = "bool"
 		case reflect.TypeFor[string]():
 			read[key] = "string"
+		case reflect.TypeFor[map[string]string]():
+			read[key] = "object"
+		case reflect.TypeFor[[]string]():
+			read[key] = "list"
 		default:
 			read[key] = field.Type.String()
 		}

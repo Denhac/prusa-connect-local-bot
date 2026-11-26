@@ -11,7 +11,7 @@
     "type": "section",
     "text": {
       "type": "plain_text",
-      "text": "/prusaconnect help: What this bot can do.\n/prusaconnect bot: How the bot itself is doing.",
+      "text": "/prusaconnect help: What this bot can do.\n/prusaconnect status [printer] [--here]: What the printers are doing. --here posts it in the channel. (in #bots)\n/prusaconnect jobs [printer]: The last prints. (in #bots)\n/prusaconnect snap [printer]: A picture from a printer's camera, posted in the channel. (in #bots)\n/prusaconnect bot: How the bot itself is doing.",
       "emoji": false
     }
   },

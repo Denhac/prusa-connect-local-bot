@@ -7,11 +7,15 @@ import (
 // Who is who may run a command.
 type Who int
 
-// The audiences, from the widest. Member and Admin arrive with the phases that
-// need them (docs/design.md, "Phases and milestones").
+// The audiences, from the widest. Members and admins arrive with phase 2
+// (docs/design.md, "Phases and milestones").
 const (
 	// Anyone in the workspace who is not refused as a guest.
 	Anyone Who = iota
+	// InBots is anyone who types it in the status channel, #bots. Only
+	// members can see that channel, so until the member check of phase 2
+	// this is how printer status stays with members.
+	InBots
 )
 
 // String names the audience in help text.
@@ -19,6 +23,8 @@ func (w Who) String() string {
 	switch w {
 	case Anyone:
 		return "anyone"
+	case InBots:
+		return "in #bots"
 	}
 
 	return "nobody"
@@ -45,6 +51,9 @@ const SlashCommand = "/prusaconnect"
 func Commands() []Command {
 	return []Command{
 		{Name: "help", Summary: "What this bot can do.", Who: Anyone},
+		{Name: "status", Usage: "[printer] [--here]", Summary: "What the printers are doing. --here posts it in the channel.", Who: InBots},
+		{Name: "jobs", Usage: "[printer]", Summary: "The last prints.", Who: InBots},
+		{Name: "snap", Usage: "[printer]", Summary: "A picture from a printer's camera, posted in the channel.", Who: InBots},
 		{Name: "bot", Summary: "How the bot itself is doing.", Who: Anyone},
 	}
 }
@@ -81,7 +90,12 @@ func Help() Message {
 			usage += " " + c.Usage
 		}
 
-		lines = append(lines, usage+": "+c.Summary)
+		line := usage + ": " + c.Summary
+		if c.Who == InBots {
+			line += " (in #bots)"
+		}
+
+		lines = append(lines, line)
 	}
 
 	return Message{
@@ -93,10 +107,11 @@ func Help() Message {
 
 // Unknown answers a word that is not a command.
 func Unknown(name string) Message {
-	return Message{
-		Lines: []string{
-			"There is no command \"" + name + "\".",
-			"Type " + SlashCommand + " help to see what this bot can do.",
-		},
-	}
+	return say(
+		"There is no command \""+name+"\".",
+		"Type "+SlashCommand+" help to see what this bot can do.",
+	)
 }
+
+// say is a message of plain lines.
+func say(lines ...string) Message { return Message{Lines: lines} }

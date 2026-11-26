@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "prusa-connect-local-bot",
-    "version": "0.1.0",
+    "version": "0.2.1",
     "description": "The routes of the Slack module. Every path is relative to the mount the host assigns, /api/v1/modules/<namespace>, and the host serves this document rebased under it at <mount>/openapi.json."
   },
   "paths": {
@@ -10,7 +10,7 @@
       "get": {
         "operationId": "get-status",
         "summary": "How the module is doing",
-        "description": "The module's version and SDK version, when it started, the state of its Slack connection, and the settings it still needs. It never carries a token. The host takes view_resource on the module's instance before this is called.",
+        "description": "The module's version and SDK version, when it started, the state of its Slack connection and of its status messages, and the settings it still needs. It never carries a token. The host takes view_resource on the module's instance before this is called.",
         "responses": {
           "200": {
             "description": "The module's health.",
@@ -19,27 +19,83 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "version": {"type": "string", "description": "The module's version."},
-                    "sdk_version": {"type": "string", "description": "The version of the Prusa Connect SDK it was built with."},
-                    "started": {"type": "string", "format": "date-time", "description": "When this process started."},
+                    "version": {
+                      "type": "string",
+                      "description": "The module's version."
+                    },
+                    "sdk_version": {
+                      "type": "string",
+                      "description": "The version of the Prusa Connect SDK it was built with."
+                    },
+                    "started": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When this process started."
+                    },
                     "slack": {
                       "type": "object",
                       "description": "The Slack connection as the module last saw it.",
                       "properties": {
-                        "state": {"type": "string", "description": "not configured, connecting, connected, retrying, or token refused."},
-                        "since": {"type": "string", "format": "date-time", "description": "When it entered that state."},
-                        "detail": {"type": "string", "description": "Why, for a connection that is not working."},
-                        "team": {"type": "string", "description": "The workspace ID the bot token belongs to."}
+                        "state": {
+                          "type": "string",
+                          "description": "not configured, connecting, connected, retrying, or token refused."
+                        },
+                        "since": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "When it entered that state."
+                        },
+                        "detail": {
+                          "type": "string",
+                          "description": "Why, for a connection that is not working."
+                        },
+                        "team": {
+                          "type": "string",
+                          "description": "The workspace ID the bot token belongs to."
+                        }
                       },
-                      "required": ["state", "since"]
+                      "required": [
+                        "state",
+                        "since"
+                      ]
                     },
                     "missing": {
                       "type": "array",
-                      "items": {"type": "string"},
+                      "items": {
+                        "type": "string"
+                      },
                       "description": "The settings the module still needs, by key."
+                    },
+                    "notify": {
+                      "type": "object",
+                      "description": "The status messages to the status channel.",
+                      "properties": {
+                        "running": {
+                          "type": "boolean",
+                          "description": "Whether the module is following the server's events."
+                        },
+                        "last_event": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "When the last event was applied."
+                        },
+                        "detail": {
+                          "type": "string",
+                          "description": "Why the messages are off, or what failed last."
+                        }
+                      },
+                      "required": [
+                        "running"
+                      ]
                     }
                   },
-                  "required": ["version", "sdk_version", "started", "slack"]
+                  "required": [
+                    "version",
+                    "sdk_version",
+                    "started",
+                    "slack",
+                    "notify"
+                  ]
                 }
               }
             }
