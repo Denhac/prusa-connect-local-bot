@@ -1,0 +1,15 @@
+# Build output: binaries, release directories and archives (make build, make release)
+/bin/
+
+# Local settings or tokens kept for a test run. Tokens never belong in the repository.
+/settings*.json
+.env
+.envrc
+
+# Test and editor output
+/coverage.out
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store

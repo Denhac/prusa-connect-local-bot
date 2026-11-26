@@ -29,6 +29,7 @@ Licence: MIT (see "Licence").
     after 90 days.
   - "Turning an account off" only changes its role to `viewer`. The person can still
     sign in and look, but cannot operate a printer.
+  - Admins can **look up** who an account, a member code or a Slack user is.
   - Admins can **suspend** an account, and the suspension holds even while the person
     is still a member.
   - Admin accounts themselves are managed by hand, and the bot never touches them.
@@ -55,6 +56,8 @@ From the user, 2026-11-22 to 2026-11-25:
    - **Former members** are found by a slow poll (daily or monthly). Their account
      moves to `viewer`, and is **deleted after 90 days** of that. denhac takes away
      their badge access first, so a local-only account is not urgent.
+   - **Admin lookup** (added by the user): an admin can find which member code, Slack
+     user and account belong together, starting from any one of them.
    - **Admin suspension:** an admin may turn an account off for a safety issue before a
      ban is assessed. It moves the role to `viewer`, and it keeps holding while the
      member page still says ACTIVE. Suspensions are made on request, never
@@ -347,7 +350,7 @@ repository:
 - The bot token and the app token are each their own `secret` option.
 - The bot is invited to #bots.
 
-**Every payload is checked first.** One from another workspace (`team_id`) is refused,
+**Every payload is checked first.** One from another workspace is refused (the bot learns its own `team_id` from `auth.test`, so there is no setting for it),
 and so is a guest, unless `allow_guests` is set.
 
 **Who is a member, for reading.** One of these must hold, in this order:
@@ -370,6 +373,7 @@ who may run it and its help text. `help` and a completeness test come from it.
 | `link` / `link <code>` | anyone with a Connect account | proves which Connect account is yours (see "Linking") |
 | `suspend <@user\|username> [reason]` | admins | confirm, then suspend. With no argument, it lists the suspensions |
 | `unsuspend <@user\|username>` | admins | confirm, then lift |
+| `lookup <@user\|username\|member code>` | admins | ephemeral: the member record behind any of the three (see "Lookup") |
 | `bot` | anyone | the module's health |
 
 **Answers.**
@@ -429,8 +433,8 @@ plus issue reason.
 | **member** | created by the bot, or claimed through `link`, and recorded in the state file | everything below |
 | **drift** | anything else: a non-admin account the bot neither made nor had claimed | log it once a day, and never touch it |
 
-A member is keyed by Slack id. It records the denhac member code, the account id, the
-username, and how it arrived (`created` or `claimed`).
+A member is keyed by its denhac member code. It records the Slack user, the account
+id, the username, and how it arrived (`created` or `claimed`).
 
 ### A member account's states
 
@@ -478,14 +482,28 @@ username, and how it arrived (`created` or `claimed`).
    | 200 with another status, or without the authorization, or a 404 | does not qualify |
    | anything else, including a page whose blocks cannot be found | **cannot tell**. It is an error, never a "no" |
 
-6. One member code belongs to one Slack user. A second Slack user with the same code is
-   refused and logged. denhac's software sets the fields, so this points at a fault.
+6. **One member code has one account.** The member code, not the Slack user or the
+   name, is what an account belongs to. See "One account per member code" for what
+   a second request does.
 
-denhac's Display Name becomes the username: lowercase, `[a-z0-9._-]`, at most 32
-characters.
-- A clash adds `-2`, `-3` and so on.
-- An empty result falls back to `member-<code>`.
-- Reserved names are refused: `admin_username`, `admin`, `root` and `slackbot`.
+**The username** starts from denhac's Display Name: lowercase, `[a-z0-9._-]`, at most
+32 characters. Member codes never appear in a username.
+- **Free:** it is used, and the person is not asked.
+- **Taken:** the signup modal says "**exampleuser** is taken" and offers a choice:
+  - the next free numbered name (`exampleuser-2`, `exampleuser-3`, …), chosen by default, so
+    one click accepts it
+  - a name the person types
+- **Empty after cleaning:** the modal asks the person to choose, suggesting their Slack
+  username, cleaned the same way.
+- **A typed name** follows the same rules. It is checked when the modal is submitted:
+  the shape, at most 32 characters, not taken, not reserved. A refusal shows in the
+  modal beside the field, and the person tries again.
+- **Reserved names** are refused: `admin_username`, `admin`, `root`, `slackbot`, and any
+  name starting with `admin`.
+- The account's display name on the server is denhac's Display Name as written.
+- The member record keeps `based_on`, the denhac Display Name the username came from.
+  A rename (below) is noticed when denhac's name differs from `based_on`, not from
+  the username, so a name the person chose is not mistaken for a rename.
 
 Tests are table tests over saved copies of the page in `testdata/denhac/`: active,
 inactive, no authorization, 404, and a changed layout.
@@ -495,11 +513,12 @@ inactive, no authorization, 404, and a changed layout.
 `/prusaconnect signup`:
 1. A modal opens at once.
 2. **Check membership** and any suspension. If the person does not qualify or is
-   suspended, show why. If they already have a member account, turn it back on if it
-   lapsed (role `operator`, password unchanged). Otherwise point to `password`.
+   suspended, show why. If their member code already has an account, follow "One
+   account per member code" below.
 3. **Write the journal entry:** `{op: signup, slack, code, username, at}`.
 4. Call create with role `operator` and a 20-character password from `crypto/rand`.
-   - A 409 (the name is taken) moves to the next name, with a new journal entry.
+   - A 409 (someone took the name between the modal and the submit) reopens the
+     choice in the modal, with the next free numbered name chosen.
 5. Store the member record, and close the entry.
 6. Show the username and password in the modal, once. Log an audit line without the
    password.
@@ -509,6 +528,43 @@ inactive, no authorization, 404, and a changed layout.
   `operator` and belonging to nobody, is taken as the bot's own. The person is told to
   run `password` when they next use the bot.
 - Anything else is logged. **No account is ever adopted because of its name.**
+
+### One account per member code
+
+Each member code has at most one member account. The server has **no rename call**
+(beta.2: list, create, delete, password, role). So a new username can only come from
+a new account, and the old one is then deleted. Everything here happens **on
+request**, in `signup`; nothing renames or replaces an account by itself.
+
+When `signup` finds the member code already has an account:
+
+| the case | what happens |
+|---|---|
+| Same Slack user, and the username denhac's Display Name gives is the account's username | nothing changes. If the account lapsed, it is turned back on (role `operator`, password unchanged). Otherwise: "You already have **name**. Use `password` to reset it" |
+| Same Slack user, and the **Display Name changed** (it differs from `based_on`) | the modal asks: "Your denhac name is now **new**. Replace your account **old** with a new one?" It says the old account and its sign-ins end, and that prints it made stay recorded under the old name. With confirm, the account is **replaced**, and the new username is chosen as for any signup, including the choice when it is taken. Without it, nothing changes |
+| **Another Slack user** with the same member code (for example, the member made a new Slack account) | the account is **replaced** and moves to the new Slack user. The old Slack user's link is dropped. denhac's software sets the code, so the newest Slack user carrying it is taken to be the member |
+
+**Replacing an account, through the writer:**
+1. Write the journal entry `{op: replace, code, old account id, new username, slack}`.
+2. Create the new account with role `operator` and a new password.
+3. Move the member record to the new account id (and to the new Slack user, if it
+   changed).
+4. Delete the old account. Its sessions, tokens and pairings end with it.
+5. Close the entry, then show the new username and password in the modal, once.
+
+**Rules:**
+- A suspended member code is never replaced. The suspension holds, and `signup` is
+  refused.
+- An account holding `admin` is never deleted, even when it shares the code. That is
+  reported in the log instead.
+- After a crash, an open entry is finished on start:
+  - a new account that exists gets the member record
+  - the old account is then deleted
+  - so the member never ends with no account, and is never left with two
+- The rate limit counts a replacement as one signup.
+
+The cost of a replacement: print history and audit lines on the server stay with the
+old, deleted account id, and the person signs in with the new name and password.
 
 ### Password reset
 
@@ -542,6 +598,37 @@ account that was there before the bot.
    - **A non-admin account**: the person must qualify, their member code must not be
      suspended, and the account must belong to nobody else. It becomes a member
      (`claimed`), and its role is set to `operator`.
+
+### Lookup (admin only)
+
+`/prusaconnect lookup <who>` finds a member from any one of the three handles and
+shows the rest. It is for an admin who knows a person by one name and needs another:
+"who is this account?", "which account is this member code?", or "what is this Slack
+user called on the printer server?".
+
+- `<who>` is a Slack mention (`@someone`), a Connect username, or a member code. The bot
+  tries them in that order.
+- **It needs an admin**, checked with `access.check` like `suspend`.
+- **It answers ephemerally**, to the admin alone, and is never posted to a channel.
+- **It reads, and changes nothing.** It reads the state file, the account list on the
+  server, and the Slack user's display name. It does not contact denhac.org; the last
+  sweep's result is shown instead.
+- **Every lookup is logged** (`component=audit`): who asked, and what they asked for.
+
+The answer shows:
+- the member code
+- the Slack user: a mention, and their display name now
+- the Connect username, and the account's display name and role on the server
+- the state (on, lapsed since …, suspended by … for …), and how it arrived (created or
+  claimed)
+- `based_on`, the denhac name the username came from
+- the last sweep check and its result
+
+When the name belongs to no member, it says what the name is instead:
+- an admin account
+- drift (a non-admin account the bot does not hold)
+- a suspension record without an account
+- or nothing at all
 
 ### Suspension (admin only)
 
@@ -662,7 +749,6 @@ egress:
 options:   # all optional: the module idles, reporting what is missing, until set
   - {key: slack_bot_token, type: secret, default: "", summary: "Bot token, xoxb-…"}
   - {key: slack_app_token, type: secret, default: "", summary: "App token for Socket Mode, xapp-…"}
-  - {key: slack_team_id, type: string, default: "", summary: "The only workspace accepted"}
   - {key: status_channel, type: string, default: "", summary: "Channel ID of #bots"}
   - {key: public_url, type: url, default: "", summary: "Where people open Connect (no Tailscale address)"}
   - {key: server_url, type: url, default: "http://127.0.0.1:8080", summary: "Where the bot signs in"}
@@ -694,8 +780,8 @@ then renamed.
 {
   "schema": 1,
   "last_alive": "…", "last_applied": "…",
-  "members": {"U012ABC": {"code": "ABCD", "account_id": "…", "username": "exampleuser",
-              "via": "created", "since": "…", "state": "on",
+  "members": {"ABCD": {"slack": "U012ABC", "account_id": "…", "username": "exampleuser",
+              "via": "created", "based_on": "Example User", "since": "…", "state": "on",
               "failed_checks": ["…"], "lapsed_at": null}},
   "suspensions": {"ABCD": {"by": "U0ADMIN", "reason": "…", "at": "…"}},
   "admins": {"U0ADMIN": {"subject": "user:…", "linked": "…"}},
@@ -759,6 +845,7 @@ as `[redacted]`, and a test checks this.
 | A taken-over Slack account of a member | it can reset only its own member account, at most 3 times a day, and every reset is logged. Never an admin account |
 | A broken denhac page or a Slack outage | "cannot tell" never turns anyone off. Turning off needs two failed checks 20 h apart, and at most 5 accounts per sweep |
 | A fake admin | admin actions need a link made through a Connect sign-in, and a check with the server every time |
+| Member codes and Slack identities seen by the wrong person | only `lookup` shows them, only to a confirmed admin, only ephemerally; every lookup is logged |
 | Phishing a link code | a nonce binds it to one Slack user, both sides name whom it links, wrong tries are limited, and it expires in 10 min |
 | The bot's password leaks | it is full control of the server: a dedicated account, a secret, loopback or TLS only, rotated in the web app |
 | A password is seen | shown once, in a modal, to its owner. Never in history or the logs |

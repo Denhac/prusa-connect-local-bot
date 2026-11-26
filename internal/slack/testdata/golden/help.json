@@ -1,0 +1,28 @@
+[
+  {
+    "type": "header",
+    "text": {
+      "type": "plain_text",
+      "text": "Printer bot",
+      "emoji": false
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "plain_text",
+      "text": "/prusaconnect help: What this bot can do.\n/prusaconnect bot: How the bot itself is doing.",
+      "emoji": false
+    }
+  },
+  {
+    "type": "context",
+    "elements": [
+      {
+        "type": "plain_text",
+        "text": "Built on Prusa Connect by Prusa Research.",
+        "emoji": false
+      }
+    ]
+  }
+]

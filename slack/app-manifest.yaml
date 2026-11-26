@@ -1,0 +1,55 @@
+# The Slack app for prusa-connect-local-bot.
+#
+# Create the app from this file: https://api.slack.com/apps → Create New App →
+# From a manifest → pick the workspace → paste this file. docs/slack-app.md has
+# the remaining steps (the app-level token, installing, inviting the bot).
+#
+# Every scope here is used by the module, and docs/compat.md says by which
+# code. Keep the two in step: a scope the code no longer uses comes out.
+display_information:
+  name: PrusaConnect Bot
+  description: Printer status and member accounts for denhac's prusa-connect server.
+  long_description: >-
+    Posts what the 3D printers are doing to #bots, and lets denhac members with the
+    3D Printer User authorization create and manage their account on the local
+    prusa-connect server with /prusaconnect. Built on Prusa Connect by Prusa Research.
+  background_color: "#2c2d30"
+
+features:
+  bot_user:
+    display_name: printer-bot
+    always_online: true
+  slash_commands:
+    - command: /prusaconnect
+      description: Printer status, and your account on the printer server
+      usage_hint: "help | status | signup | password | whoami"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      # /prusaconnect itself.
+      - commands
+      # Status messages in #bots, and DMs the bot opened.
+      - chat:write
+      # Camera stills, through the external upload flow.
+      - files:write
+      # users.info: guests, deactivated users, display names.
+      - users:read
+      # users.profile.get and team.profile.get: the Member and Member Code URL fields.
+      - users.profile:read
+      # conversations.open: the DM that carries a link address.
+      - im:write
+      # Not used by this module: kept for the webhook integration this app
+      # already served before the module.
+      - incoming-webhook
+
+
+settings:
+  # Commands and button clicks arrive over the Socket Mode WebSocket, so no
+  # request URL is needed and the server needs no public address.
+  socket_mode_enabled: true
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false

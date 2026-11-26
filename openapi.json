@@ -1,0 +1,51 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "prusa-connect-local-bot",
+    "version": "0.1.0",
+    "description": "The routes of the Slack module. Every path is relative to the mount the host assigns, /api/v1/modules/<namespace>, and the host serves this document rebased under it at <mount>/openapi.json."
+  },
+  "paths": {
+    "/status": {
+      "get": {
+        "operationId": "get-status",
+        "summary": "How the module is doing",
+        "description": "The module's version and SDK version, when it started, the state of its Slack connection, and the settings it still needs. It never carries a token. The host takes view_resource on the module's instance before this is called.",
+        "responses": {
+          "200": {
+            "description": "The module's health.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {"type": "string", "description": "The module's version."},
+                    "sdk_version": {"type": "string", "description": "The version of the Prusa Connect SDK it was built with."},
+                    "started": {"type": "string", "format": "date-time", "description": "When this process started."},
+                    "slack": {
+                      "type": "object",
+                      "description": "The Slack connection as the module last saw it.",
+                      "properties": {
+                        "state": {"type": "string", "description": "not configured, connecting, connected, retrying, or token refused."},
+                        "since": {"type": "string", "format": "date-time", "description": "When it entered that state."},
+                        "detail": {"type": "string", "description": "Why, for a connection that is not working."},
+                        "team": {"type": "string", "description": "The workspace ID the bot token belongs to."}
+                      },
+                      "required": ["state", "since"]
+                    },
+                    "missing": {
+                      "type": "array",
+                      "items": {"type": "string"},
+                      "description": "The settings the module still needs, by key."
+                    }
+                  },
+                  "required": ["version", "sdk_version", "started", "slack"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

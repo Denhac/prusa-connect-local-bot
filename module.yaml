@@ -1,0 +1,71 @@
+# The manifest the prusa-connect server reads when it installs this module.
+#
+# It names no namespace: the server derives it from the module path the
+# operator installs, github.com/denhac/prusa-connect-local-bot, which gives
+# com.github.aux.denhac.prusa-connect-local-bot.
+#
+# manifest_test.go holds this file to the code: the name and version to
+# internal/app, the options to internal/settings, and the routes to
+# openapi.json.
+#
+# Each phase asks only for what it uses (docs/design.md, "Phases and
+# milestones"). A request added later is approved again at that update.
+
+name: slack-bot
+title: Slack bot
+summary: Posts printer status to Slack, and lets denhac members manage their account with /prusaconnect.
+codeowner: denhac
+kind: sink
+version: 0.1.0
+license: MIT
+contract_major: 1
+openapi: openapi.json
+
+# The core release this was built against, and the wire methods it calls.
+require:
+  core: ">=0.1.0-beta.2 <0.2.0"
+  core-device.list: "*"
+
+# What the module does as itself: it reads the printers, for the bot command
+# now and for status messages next.
+permissions:
+  - observe
+
+needs:
+  # Where the module keeps its state file (from phase 1).
+  data: true
+
+# Every connection outside the server.
+egress:
+  - host: slack.com
+    from: process
+    why: The Slack Web API, and opening the Socket Mode connection.
+    sends: Command answers and status messages.
+  - host: "*.slack.com"
+    from: process
+    why: The Socket Mode WebSocket, and answers to commands through response_url.
+    sends: Acknowledgements and command answers.
+
+# Every setting is optional: a required one left empty would make the server
+# refuse the install. The module runs idle and lists what is missing instead.
+options:
+  - key: slack_bot_token
+    type: secret
+    default: ""
+    summary: The Slack app's bot token, starting xoxb-.
+  - key: slack_app_token
+    type: secret
+    default: ""
+    summary: The Slack app's app-level token for Socket Mode, starting xapp-, with the scope connections:write.
+  - key: status_channel
+    type: string
+    default: ""
+    summary: The ID of the channel that status goes to (#bots), such as C0123ABCD.
+  - key: allow_guests
+    type: bool
+    default: "false"
+    summary: Whether Slack guest accounts may use /prusaconnect.
+
+platforms:
+  - linux_arm64
+  - linux_amd64
