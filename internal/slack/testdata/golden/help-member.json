@@ -1,0 +1,49 @@
+[
+  {
+    "type": "header",
+    "text": {
+      "type": "plain_text",
+      "text": "Printer bot",
+      "emoji": false
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "plain_text",
+      "text": "Type /prusaconnect and a command. Only you see the answers, unless a command says it posts.",
+      "emoji": false
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Printers (in #bots)*\n`/prusaconnect status [printer] [--here]`  What the printers are doing. --here posts it in the channel.\n`/prusaconnect jobs [printer]`  The last prints.\n`/prusaconnect snap [printer]`  A picture from a printer's camera, posted in the channel."
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Your account on the printer server*\n`/prusaconnect signup`  Make your account (denhac members with 3D Printer User).\n`/prusaconnect password`  Set a new password on your account.\n`/prusaconnect whoami`  What the bot knows about you.\n`/prusaconnect link [code]`  Link your Slack user to an account you already have."
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*This bot*\n`/prusaconnect help`  This list.\n`/prusaconnect bot`  How the bot itself is doing."
+    }
+  },
+  {
+    "type": "context",
+    "elements": [
+      {
+        "type": "plain_text",
+        "text": "Built on Prusa Connect by Prusa Research.",
+        "emoji": false
+      }
+    ]
+  }
+]

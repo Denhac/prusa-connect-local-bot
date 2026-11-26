@@ -24,6 +24,22 @@ type Message struct {
 	Link string
 	// Buttons are clicks the person can make on the message.
 	Buttons []Button
+	// Groups are headed lists, each item drawn as code and a line of text.
+	// Help uses them.
+	Groups []Group
+}
+
+// Group is a heading and its items.
+type Group struct {
+	Heading string
+	Items   []Item
+}
+
+// Item is one entry in a group: Code is drawn as code, such as a command's
+// usage, and Text after it.
+type Item struct {
+	Code string
+	Text string
 }
 
 // Button is one click on a message. Action says what it does, and Value is

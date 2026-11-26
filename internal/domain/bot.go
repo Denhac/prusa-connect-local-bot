@@ -70,7 +70,9 @@ func (b *Bot) handlers() map[string]handler {
 	}
 
 	return map[string]handler{
-		"help": plain(func(context.Context, Request, []string) Message { return Help() }),
+		"help": plain(func(ctx context.Context, r Request, _ []string) Message {
+			return Help(b.cfg.Accounts != nil && b.cfg.Accounts.IsAdmin(ctx, r.User))
+		}),
 		"bot": plain(func(ctx context.Context, _ Request, _ []string) Message {
 			return BotStatus(ctx, b.cfg.Health(), b.cfg.Fleet, b.cfg.Now())
 		}),

@@ -24,6 +24,8 @@ type Modal struct {
 	Title  string
 	Lines  []string
 	Fields []Field
+	// Link is an address drawn as a link after the fields, if any.
+	Link string
 	// Input is one text field, if any.
 	Input *Input
 	// Callback names what a submit is for. Empty is a window with no submit.

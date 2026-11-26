@@ -367,7 +367,9 @@ and so is a guest, unless `allow_guests` is set.
 3. they qualify now (the answer is cached for 10 minutes, as long as denhac's own cache)
 
 **Commands.** One table in `internal/domain/commands.go` holds each command's words,
-who may run it and its help text. `help` and a completeness test come from it.
+who may run it, its help text and its heading. `help` and a completeness test come from it.
+`help` groups the commands under headings, and lists the admin commands only for a
+linked admin the server confirms (0.6.0).
 
 | command | who | answer |
 |---|---|---|
@@ -530,7 +532,12 @@ inactive, no authorization, 404, and a changed layout.
    suspended, show why. If their member code already has an account, follow "One
    account per member code" below.
 3. **Write the journal entry:** `{op: signup, slack, code, username, at}`.
-4. Call create with role `operator` and a 12-character password from `crypto/rand` (about 69 bits).
+4. Call create with role `operator` and a password of three words drawn with `crypto/rand`
+   from the module's own list of 1,138 short words, such as `maple-river-lantern` (about
+   30 bits, 0.6.0). The server has no "change at next sign-in" flag, so the window asks
+   the person to change it, with a link to the web app's account page
+   (`<public_url>/settings/account`). The sign-in is rate limited and the server is
+   reached only on the space's network.
    - A 409 (someone took the name between the modal and the submit) reopens the
      choice in the modal, with the next free numbered name chosen.
 5. Store the member record, and close the entry.
@@ -883,7 +890,6 @@ fields at the top level) is read and converted.
   "suspensions": {"ABCD": {"by": "U0ADMIN", "reason": "…", "at": "…"}},
   "admins": {"U0ADMIN": {"subject": "user:…", "linked": "…"}},
   "journal": [{"id": "…", "op": "suspend", "account_id": "…", "step": 1, "at": "…"}],
-  "limits": {"U012ABC": ["…"]},
   "job_threads": {"<job id>": {"channel": "C…", "ts": "…", "posted": ["started"]}},
   "open_issues": {"<device>/<reason>": {"ts": "…"}}
 }
@@ -939,7 +945,7 @@ as `[redacted]`, and a test checks this.
 | Another workspace, or a guest | `team_id` checked on every payload; guests refused by default |
 | A non-member reads printer status or stills | read commands answer members only, and post only in #bots |
 | Someone claims membership they lack | denhac's software sets the fields, not the member. The bot reads them from Slack, builds the URL itself, and reads denhac's own page. One code belongs to one Slack user |
-| A taken-over Slack account of a member | it can reset only its own member account, at most 3 times a day, and every reset is logged. Never an admin account |
+| A taken-over Slack account of a member | it can reset only its own member account, and every reset is logged. There is no daily limit (removed in 0.6.0 at the user's word). Never an admin account |
 | A broken denhac page or a Slack outage | "cannot tell" never turns anyone off. Turning off needs two failed checks 20 h apart, at most 5 accounts in any 24 h, and a full pass in which somebody qualifies |
 | A fake admin | admin actions need a link made through a Connect sign-in, and a check with the server every time |
 | Member codes and Slack identities seen by the wrong person | only `lookup` shows them, only to a confirmed admin, only ephemerally; every lookup is logged |

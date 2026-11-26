@@ -189,13 +189,39 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func helpText(m Message) string {
+	var b strings.Builder
+
+	for _, g := range m.Groups {
+		b.WriteString(g.Heading + "\n")
+
+		for _, it := range g.Items {
+			b.WriteString(it.Code + " " + it.Text + "\n")
+		}
+	}
+
+	return b.String()
+}
+
+// TestHelpListsEveryCommand lists every command for an admin, and the admin
+// commands for nobody else.
 func TestHelpListsEveryCommand(t *testing.T) {
-	help := strings.Join(Help().Lines, "\n")
+	forAdmin, forMember := helpText(Help(true)), helpText(Help(false))
 
 	for _, c := range Commands() {
-		if !strings.Contains(help, SlashCommand+" "+c.Name) {
-			t.Errorf("help does not list %s", c.Name)
+		word := SlashCommand + " " + c.Name + " " // helpText puts a space after every usage
+		if !strings.Contains(forAdmin, word) {
+			t.Errorf("an admin's help does not list %s", c.Name)
 		}
+
+		listed := strings.Contains(forMember, word)
+		if listed != (c.Who != Admins) {
+			t.Errorf("a member's help lists %s: %v", c.Name, listed)
+		}
+	}
+
+	if strings.Contains(forMember, groupAdmins) {
+		t.Error("a member's help has the admin heading")
 	}
 }
 

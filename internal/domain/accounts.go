@@ -22,10 +22,9 @@ import (
 
 // The service's limits.
 const (
-	actionsPerDay = 3
-	linkFor       = 10 * time.Minute
-	maxLinkTries  = 5
-	confirmFor    = 10 * time.Minute
+	linkFor      = 10 * time.Minute
+	maxLinkTries = 5
+	confirmFor   = 10 * time.Minute
 )
 
 // AccountsConfig is what the service is built from.
@@ -38,7 +37,10 @@ type AccountsConfig struct {
 	BotAccount string
 	// LinkURL is the module's /link page, to which ?for=<nonce> is added.
 	LinkURL string
-	Now     func() time.Time
+	// AccountURL is the web app's page where a person changes their own
+	// password, or empty when public_url is not set.
+	AccountURL string
+	Now        func() time.Time
 	// Save writes the state; it is called with the lock held.
 	Save func(MembersState) error
 	Log  *slog.Logger
@@ -93,10 +95,6 @@ func NewAccountsService(cfg AccountsConfig, st MembersState) *AccountsService {
 		st.Admins = map[string]*AdminLink{}
 	}
 
-	if st.Limits == nil {
-		st.Limits = map[string][]time.Time{}
-	}
-
 	return &AccountsService{
 		cfg: cfg, log: cfg.Log.With("component", "audit"), st: st,
 		asks: map[string]linkAsk{}, codes: map[string]*linkCode{}, tries: map[string]int{},
@@ -113,28 +111,22 @@ func (s *AccountsService) save() {
 
 // ----- helpers -------------------------------------------------------------
 
-// passwordLength is how long a made password is: short enough to type from
-// the window, and about 69 bits from the letters below, plenty for a server
-// reached only on the space's own network.
-const passwordLength = 12
-
-// newPassword is passwordLength characters from crypto/rand, from letters and
-// digits a person cannot mistake for one another.
+// newPassword is three words from passwordWords, drawn with crypto/rand and
+// joined by hyphens, such as maple-river-lantern. The person is asked to
+// change it after they sign in.
 func newPassword() (string, error) {
-	const letters = "abcdefghijkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXYZ23456789"
+	picked := make([]string, 3)
 
-	var b strings.Builder
-
-	for range passwordLength {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+	for i := range picked {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(passwordWords))))
 		if err != nil {
 			return "", fmt.Errorf("make a password: %w", err)
 		}
 
-		b.WriteByte(letters[n.Int64()])
+		picked[i] = passwordWords[n.Int64()]
 	}
 
-	return b.String(), nil
+	return strings.Join(picked, "-"), nil
 }
 
 func randomToken(n int) string {
@@ -186,26 +178,6 @@ func (s *AccountsService) memberOf(slack string) (string, *MemberRecord) {
 	return "", nil
 }
 
-// overLimit and count hold signups and resets to actionsPerDay per person.
-func (s *AccountsService) overLimit(slack string) bool {
-	now := s.cfg.Now()
-	kept := s.st.Limits[slack][:0]
-
-	for _, at := range s.st.Limits[slack] {
-		if now.Sub(at) < 24*time.Hour {
-			kept = append(kept, at)
-		}
-	}
-
-	s.st.Limits[slack] = kept
-
-	return len(kept) >= actionsPerDay
-}
-
-func (s *AccountsService) count(slack string) {
-	s.st.Limits[slack] = append(s.st.Limits[slack], s.cfg.Now())
-}
-
 func (s *AccountsService) begin(e JournalEntry) {
 	e.At = s.cfg.Now()
 	s.st.Journal = append(s.st.Journal, &e)
@@ -235,6 +207,15 @@ func show(ctx context.Context, ui UI, id string, m Modal, plain Message) {
 }
 
 func plainOf(m Modal) Message { return Message{Lines: m.Lines, Fields: m.Fields} }
+
+// changeIt asks a person to change a password the bot made.
+func (s *AccountsService) changeIt() string {
+	if s.cfg.AccountURL != "" {
+		return "Sign in, then change it to a password of your own on your account page:"
+	}
+
+	return "Sign in, then change it to a password of your own under Settings, Account in the printer server's web app."
+}
 
 func window(title string, lines ...string) Modal { return Modal{Title: title, Lines: lines} }
 
@@ -268,7 +249,7 @@ func (s *AccountsService) Signup(ctx context.Context, r Request, ui UI) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if refusal, ok := s.refuse(m.Code, r.User); !ok {
+	if refusal, ok := s.refuse(m.Code); !ok {
 		show(ctx, ui, id, refusal, plainOf(refusal))
 
 		return
@@ -443,7 +424,6 @@ func (s *AccountsService) create(ctx context.Context, ui UI, id string, r Reques
 		Slack: r.User, AccountID: acct.ID, Username: acct.Username, Via: "created",
 		BasedOn: m.DisplayName, Since: s.cfg.Now(), Qualified: s.cfg.Now(),
 	}
-	s.count(r.User)
 	s.save()
 
 	if old != "" {
@@ -464,8 +444,10 @@ func (s *AccountsService) create(ctx context.Context, ui UI, id string, r Reques
 		Title: "Your account",
 		Lines: []string{
 			"Your account on the printer server is ready. Copy the password now: it is not shown again.",
+			s.changeIt(),
 		},
 		Fields: []Field{{Label: "Username", Value: acct.Username}, {Label: "Password", Value: password}},
+		Link:   s.cfg.AccountURL,
 	}
 	show(ctx, ui, id, w, Message{Lines: []string{
 		"Your account " + acct.Username + " is ready, but the window closed before the password could be shown.",
@@ -473,14 +455,10 @@ func (s *AccountsService) create(ctx context.Context, ui UI, id string, r Reques
 	}})
 }
 
-// refuse answers a suspended member code, or a person over the limit.
-func (s *AccountsService) refuse(code, slack string) (Modal, bool) {
+// refuse answers a suspended member code.
+func (s *AccountsService) refuse(code string) (Modal, bool) {
 	if _, suspended := s.st.Suspensions[code]; suspended {
 		return window("Sign up", "Your account is suspended. Talk to an admin."), false
-	}
-
-	if s.overLimit(slack) {
-		return window("Sign up", fmt.Sprintf("You have signed up or reset a password %d times today. Try again tomorrow.", actionsPerDay)), false
 	}
 
 	return Modal{}, true
@@ -505,7 +483,7 @@ func (s *AccountsService) SignupSubmit(ctx context.Context, it Interaction, ui U
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if refusal, ok := s.refuse(m.Code, it.User); !ok {
+	if refusal, ok := s.refuse(m.Code); !ok {
 		show(ctx, ui, it.ModalID, refusal, plainOf(refusal))
 
 		return
@@ -560,7 +538,7 @@ func (s *AccountsService) Password(ctx context.Context, r Request, ui UI) {
 		return
 	}
 
-	if refusal, ok := s.refuse(m.Code, r.User); !ok {
+	if refusal, ok := s.refuse(m.Code); !ok {
 		refusal.Title = "New password"
 		show(ctx, ui, id, refusal, plainOf(refusal))
 
@@ -613,7 +591,6 @@ func (s *AccountsService) Password(ctx context.Context, r Request, ui UI) {
 		return
 	}
 
-	s.count(r.User)
 	s.save()
 	s.log.Info("password reset", "account", acct.Username, "slack", r.User)
 
@@ -621,9 +598,11 @@ func (s *AccountsService) Password(ctx context.Context, r Request, ui UI) {
 		Title: "New password",
 		Lines: []string{
 			"Copy the password now: it is not shown again.",
-			"Every sign-in, token and app pairing of the account has ended.",
+			"Anywhere you were signed in with the old password has been logged off.",
+			s.changeIt(),
 		},
 		Fields: []Field{{Label: "Username", Value: acct.Username}, {Label: "Password", Value: password}},
+		Link:   s.cfg.AccountURL,
 	}
 	show(ctx, ui, id, w, Message{Lines: []string{
 		"Your password was reset, but the window closed before it could be shown.",
@@ -885,6 +864,14 @@ func (s *AccountsService) admin(ctx context.Context, slack string) (Message, boo
 	}
 
 	return Message{}, true
+}
+
+// IsAdmin is whether a Slack user is linked to an account the server
+// confirms is an admin now. Help lists the admin commands for them.
+func (s *AccountsService) IsAdmin(ctx context.Context, slack string) bool {
+	_, ok := s.admin(ctx, slack)
+
+	return ok
 }
 
 var mention = regexp.MustCompile(`^<@([A-Z0-9]+)(\|[^>]*)?>$`)

@@ -96,7 +96,7 @@ func modalView(m domain.Modal) slack.ModalViewRequest {
 		title = string(r[:maxTitle])
 	}
 
-	blocks := Render(domain.Message{Lines: m.Lines, Fields: m.Fields})
+	blocks := Render(domain.Message{Lines: m.Lines, Fields: m.Fields, Link: m.Link})
 
 	if in := m.Input; in != nil {
 		element := slack.NewPlainTextInputBlockElement(nil, in.ID)

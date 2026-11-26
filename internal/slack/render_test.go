@@ -48,7 +48,10 @@ func golden(t *testing.T, name string, m domain.Message) {
 	}
 }
 
-func TestRenderHelp(t *testing.T) { golden(t, "help", domain.Help()) }
+func TestRenderHelp(t *testing.T) {
+	golden(t, "help", domain.Help(true))
+	golden(t, "help-member", domain.Help(false))
+}
 
 func TestRenderFields(t *testing.T) {
 	golden(t, "fields", domain.Message{

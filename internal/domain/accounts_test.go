@@ -217,9 +217,10 @@ func newWorld(t *testing.T) *world {
 		Verifier: w.verifier, Accounts: w.accounts, Access: fakeAccess{"user:admin1": true},
 		Directory: names{"U1": "example", "UADMIN": "Boss"}, BotAccount: "slackbot",
 		LinkURL: "https://printserver.example/api/v1/modules/x/link", Now: func() time.Time { return w.clock },
-		Save:  func(st MembersState) error { w.saved = st; w.saves++; return nil },
-		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Sweep: DefaultSweepConfig(),
+		AccountURL: "https://printserver.example/settings/account",
+		Save:       func(st MembersState) error { w.saved = st; w.saves++; return nil },
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Sweep:      DefaultSweepConfig(),
 	}, MembersState{})
 
 	return w
@@ -244,7 +245,8 @@ func TestSignup(t *testing.T) {
 	w.svc.Signup(context.Background(), Request{User: "U1"}, ui)
 
 	got := ui.last()
-	if fieldOf(got, "Username") != "example.user" || len(fieldOf(got, "Password")) != passwordLength {
+	if fieldOf(got, "Username") != "example.user" || strings.Count(fieldOf(got, "Password"), "-") != 2 ||
+		!strings.Contains(linesOf(got), "change it") || got.Link != "https://printserver.example/settings/account" {
 		t.Fatalf("signup showed %+v", got)
 	}
 
@@ -276,10 +278,9 @@ func TestSignupRefusals(t *testing.T) {
 		setup func(*world)
 		want  string
 	}{
-		"not a member":   {user: "U9", want: "does not say you are a denhac member"},
-		"cannot tell":    {user: "U1", setup: func(w *world) { w.verifier.err = errors.New("denhac is down") }, want: "cannot check your membership"},
-		"suspended":      {user: "U1", setup: func(w *world) { w.svc.st.Suspensions["ABCD"] = &Suspension{} }, want: "suspended"},
-		"over the limit": {user: "U1", setup: func(w *world) { w.svc.st.Limits["U1"] = []time.Time{start, start, start} }, want: "3 times today"},
+		"not a member": {user: "U9", want: "does not say you are a denhac member"},
+		"cannot tell":  {user: "U1", setup: func(w *world) { w.verifier.err = errors.New("denhac is down") }, want: "cannot check your membership"},
+		"suspended":    {user: "U1", setup: func(w *world) { w.svc.st.Suspensions["ABCD"] = &Suspension{} }, want: "suspended"},
 	}
 
 	for name, c := range cases {
@@ -419,8 +420,8 @@ func TestPassword(t *testing.T) {
 	w.svc.Password(context.Background(), Request{User: "U1"}, ui)
 
 	got := fieldOf(ui.last(), "Password")
-	if len(got) != passwordLength || len(first) != passwordLength {
-		t.Errorf("passwords %q and %q are not %d characters", first, got, passwordLength)
+	if strings.Count(got, "-") != 2 || strings.Count(first, "-") != 2 || !strings.Contains(linesOf(ui.last()), "change it") {
+		t.Errorf("passwords %q and %q are not three words, or the window does not ask to change it", first, got)
 	}
 
 	if got == "" || got == first || w.accounts.passwords[id] != got || w.accounts.get(id).Role != RoleOperator {

@@ -42,7 +42,7 @@ import (
 // version is the manifest's version: manifest_test.go holds them together.
 const (
 	Name    = "slack-bot"
-	Version = extension.Version("0.5.0")
+	Version = extension.Version("0.6.2")
 )
 
 // Namespace is where the server mounts the module's routes: the module path
@@ -322,14 +322,15 @@ func (m *module) newAccounts(
 		return nil, fmt.Errorf("verify: %w", err)
 	}
 
-	link := ""
+	link, account := "", ""
 	if values.PublicURL != "" {
 		link = strings.TrimRight(values.PublicURL, "/") + "/api/v1/modules/" + Namespace + "/link"
+		account = strings.TrimRight(values.PublicURL, "/") + "/settings/account"
 	}
 
 	return domain.NewAccountsService(domain.AccountsConfig{
 		Verifier: verifier, Accounts: serverhttp.NewAccounts(session, values.AdminUsername),
-		Access: m.access, Directory: profiles, BotAccount: values.AdminUsername, LinkURL: link,
+		Access: m.access, Directory: profiles, BotAccount: values.AdminUsername, LinkURL: link, AccountURL: account,
 		Now: m.now, Save: state.SaveAccounts, Log: m.log,
 		Sweep: domain.SweepConfig{
 			Interval: values.SweepInterval, MaxChanges: values.SweepMaxChanges, DeleteAfter: values.DeleteAfter,

@@ -98,8 +98,6 @@ type MembersState struct {
 	Admins map[string]*AdminLink `json:"admins,omitempty"`
 	// Journal is account changes begun and not yet finished.
 	Journal []*JournalEntry `json:"journal,omitempty"`
-	// Limits are the times of each chat user's signups and resets.
-	Limits map[string][]time.Time `json:"limits,omitempty"`
 	// Sweep is where the membership sweep stands.
 	Sweep SweepState `json:"sweep,omitzero"`
 }

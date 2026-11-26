@@ -68,10 +68,11 @@ them. Read the `[sdk]` lines of each release's `docs/CHANGELOG.md`.
 | `GET /api/v1/cameras/{camera}/snapshot` | `200 image/jpeg` with `Last-Modified`. `204` is no frame yet, `404` an unknown camera, `502` a camera the server could not read. Over 10 minutes old is treated as live view on |
 | `GET /api/v1/auth/accounts` | `items[]` with `id`, `username`, `display_name`, `role` (`viewer`, `operator`, `admin`, or empty) and `created_at`. Read again before every change, which refuses an account holding admin or the bot's own |
 | `POST /api/v1/auth/accounts` | `{username, password, display_name, role: "operator"}`. 201 is the account; 409 is a taken name. Needs a sign-in |
-| `POST /api/v1/auth/accounts/{id}/password` | `{new_password}`. 204. A 5xx is tried again: the server may have set the password and failed to end the old sessions. It ends every session, token and pairing of the account |
+| `POST /api/v1/auth/accounts/{id}/password` | `{new_password}`, 8 to 72 bytes. 204. A 5xx is tried again: the server may have set the password and failed to end the old sessions. It ends every session, token and pairing of the account |
 | `PUT /api/v1/auth/accounts/{id}/role` | `{role}`: `operator` or `viewer`, and `admin` only from `MakeAdmin` on an account that is an operator now (0.5.0). 204. It takes a sign-in and `configure_resource` on `auth`, and refuses taking admin from the last admin |
 | `DELETE /api/v1/auth/accounts/{id}` | 204; 404 is taken as already gone. Only the sweep deletes, after `delete_after` lapsed |
 | `GET /api/v1/grants/subject/user:{id}/direct` | `{subject, items[]}`, each item `{object, relation, subject}`: the grants written on single printers for one account, on the printers the caller administers. An org role is not among them. The sweep only logs them |
+| `/settings/account` (web app) | the page where a person changes their own password, with the current one. The password window links to it under `public_url` |
 | `access.check` (wire) | `configure_resource` on `resource_kind`/`auth` for `user:<id>`, with `checks: [configure_resource]` and `check_absent_people: true`: whether a linked admin still administers the server |
 | `routes.serve` `GET /link` | the principal the host passes (`routesapi.PrincipalOf`); only `user:` principals get a code |
 

@@ -17,7 +17,8 @@ const fieldsPerSection = 10
 // Render draws a message as Block Kit blocks.
 //
 // Lines and the footer are plain_text, so nothing in them is read as markup.
-// Field labels are bold, which needs mrkdwn; their values are escaped.
+// Field labels and group headings are bold, and group items are code, which
+// needs mrkdwn; everything in mrkdwn is escaped.
 func Render(m domain.Message) []slack.Block {
 	var blocks []slack.Block
 
@@ -39,6 +40,18 @@ func Render(m domain.Message) []slack.Block {
 		}
 
 		blocks = append(blocks, slack.NewSectionBlock(nil, fields, nil))
+	}
+
+	for _, g := range m.Groups {
+		var b strings.Builder
+
+		b.WriteString("*" + escape(g.Heading) + "*")
+
+		for _, it := range g.Items {
+			b.WriteString("\n`" + escape(it.Code) + "`  " + escape(it.Text))
+		}
+
+		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, b.String(), false, false), nil, nil))
 	}
 
 	if m.Link != "" {

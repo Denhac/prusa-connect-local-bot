@@ -4,6 +4,19 @@ Newest first. Each heading is a version in `module.yaml`. A change to what the
 module ships raises that version, so the server's Extensions page offers it as an
 update.
 
+## 0.6.2 - unreleased
+
+- No more limit of 3 signups or password resets per person a day.
+- The new-password window says old sign-ins were logged off, in plain words.
+
+## 0.6.0 - unreleased
+
+- `help` groups the commands under headings, each as code with its summary, and lists
+  the admin commands only for a linked admin the server confirms.
+- Passwords the bot makes are three short words, such as `maple-river-lantern`, from a
+  list of 1,138 written for the module. The window asks the person to change it after
+  they sign in, and links to their account page when `public_url` is set.
+
 ## 0.5.0 - unreleased
 
 - `admin <who>` makes a member's own account an admin, confirmed with a button. It

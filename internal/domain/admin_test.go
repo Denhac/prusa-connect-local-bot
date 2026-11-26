@@ -295,3 +295,18 @@ func TestRecoverAnAdminCommand(t *testing.T) {
 		t.Errorf("the journal kept %+v", w.svc.st.Journal)
 	}
 }
+
+// TestIsAdmin is a linked admin the server confirms, and nobody else.
+func TestIsAdmin(t *testing.T) {
+	w := adminWorld(t)
+
+	if !w.svc.IsAdmin(context.Background(), "UADMIN") || w.svc.IsAdmin(context.Background(), "U-ABCD") {
+		t.Error("IsAdmin is wrong")
+	}
+
+	w.svc.cfg.Access.(fakeAccess)["user:admin1"] = false
+
+	if w.svc.IsAdmin(context.Background(), "UADMIN") {
+		t.Error("an admin the server no longer confirms is still one")
+	}
+}

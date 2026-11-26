@@ -44,30 +44,42 @@ type Command struct {
 	Summary string
 	// Who may run it.
 	Who Who
+	// Group is the heading help lists it under.
+	Group string
 }
 
 // SlashCommand is the command people type in Slack.
 const SlashCommand = "/prusaconnect"
 
+// The headings of the help text, in its order.
+const (
+	groupPrinters = "Printers (in #bots)"
+	groupAccount  = "Your account on the printer server"
+	groupAdmins   = "Admins"
+	groupBot      = "This bot"
+)
+
 // Commands is every command, in the order help lists them. It is the one
 // list: help is drawn from it, and a test fails when a command here has no
 // handler or a handler has no entry here.
 func Commands() []Command {
+	const who = "<@user|username|member code>"
+
 	return []Command{
-		{Name: "help", Summary: "What this bot can do.", Who: Anyone},
-		{Name: "status", Usage: "[printer] [--here]", Summary: "What the printers are doing. --here posts it in the channel.", Who: InBots},
-		{Name: "jobs", Usage: "[printer]", Summary: "The last prints.", Who: InBots},
-		{Name: "snap", Usage: "[printer]", Summary: "A picture from a printer's camera, posted in the channel.", Who: InBots},
-		{Name: "signup", Summary: "Make your account on the printer server (denhac members with 3D Printer User).", Who: Anyone},
-		{Name: "password", Summary: "Set a new password on your account.", Who: Anyone},
-		{Name: "whoami", Summary: "What the bot knows about you.", Who: Anyone},
-		{Name: "link", Usage: "[code]", Summary: "Link your Slack user to an account you already have on the printer server.", Who: Anyone},
-		{Name: "bot", Summary: "How the bot itself is doing.", Who: Anyone},
-		{Name: "suspend", Usage: "[@user|username|member code] [reason]", Summary: "Turn an account off until an admin lifts it. Alone, lists the suspensions.", Who: Admins},
-		{Name: "unsuspend", Usage: "<@user|username|member code>", Summary: "Lift a suspension.", Who: Admins},
-		{Name: "lookup", Usage: "<@user|username|member code>", Summary: "Which member code, Slack user and account belong together.", Who: Admins},
-		{Name: "admin", Usage: "<@user|username|member code>", Summary: "Make a member's account an admin.", Who: Admins},
-		{Name: "unadmin", Usage: "<@user|username|member code>", Summary: "Take admin from an account the bot made an admin.", Who: Admins},
+		{Name: "status", Usage: "[printer] [--here]", Summary: "What the printers are doing. --here posts it in the channel.", Who: InBots, Group: groupPrinters},
+		{Name: "jobs", Usage: "[printer]", Summary: "The last prints.", Who: InBots, Group: groupPrinters},
+		{Name: "snap", Usage: "[printer]", Summary: "A picture from a printer's camera, posted in the channel.", Who: InBots, Group: groupPrinters},
+		{Name: "signup", Summary: "Make your account (denhac members with 3D Printer User).", Who: Anyone, Group: groupAccount},
+		{Name: "password", Summary: "Set a new password on your account.", Who: Anyone, Group: groupAccount},
+		{Name: "whoami", Summary: "What the bot knows about you.", Who: Anyone, Group: groupAccount},
+		{Name: "link", Usage: "[code]", Summary: "Link your Slack user to an account you already have.", Who: Anyone, Group: groupAccount},
+		{Name: "suspend", Usage: "[@user|username|member code] [reason]", Summary: "Turn an account off until an admin lifts it. Alone, lists the suspensions.", Who: Admins, Group: groupAdmins},
+		{Name: "unsuspend", Usage: who, Summary: "Lift a suspension.", Who: Admins, Group: groupAdmins},
+		{Name: "lookup", Usage: who, Summary: "Which member code, Slack user and account belong together.", Who: Admins, Group: groupAdmins},
+		{Name: "admin", Usage: who, Summary: "Make a member's account an admin.", Who: Admins, Group: groupAdmins},
+		{Name: "unadmin", Usage: who, Summary: "Take admin from an account the bot made an admin.", Who: Admins, Group: groupAdmins},
+		{Name: "help", Summary: "This list.", Who: Anyone, Group: groupBot},
+		{Name: "bot", Summary: "How the bot itself is doing.", Who: Anyone, Group: groupBot},
 	}
 }
 
@@ -93,27 +105,33 @@ func Parse(text string) (name string, args []string) {
 	return strings.ToLower(words[0]), words[1:]
 }
 
-// Help is the help text, drawn from Commands.
-func Help() Message {
-	lines := make([]string, 0, len(Commands()))
+// Help is the help text, drawn from Commands and grouped by their headings.
+// The admin commands are listed only for an admin.
+func Help(admin bool) Message {
+	var groups []Group
 
 	for _, c := range Commands() {
+		if c.Who == Admins && !admin {
+			continue
+		}
+
 		usage := SlashCommand + " " + c.Name
 		if c.Usage != "" {
 			usage += " " + c.Usage
 		}
 
-		line := usage + ": " + c.Summary
-		if c.Who != Anyone {
-			line += " (" + c.Who.String() + ")"
+		if len(groups) == 0 || groups[len(groups)-1].Heading != c.Group {
+			groups = append(groups, Group{Heading: c.Group})
 		}
 
-		lines = append(lines, line)
+		last := &groups[len(groups)-1]
+		last.Items = append(last.Items, Item{Code: usage, Text: c.Summary})
 	}
 
 	return Message{
 		Title:  "Printer bot",
-		Lines:  lines,
+		Lines:  []string{"Type " + SlashCommand + " and a command. Only you see the answers, unless a command says it posts."},
+		Groups: groups,
 		Footer: "Built on Prusa Connect by Prusa Research.",
 	}
 }
