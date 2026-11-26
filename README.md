@@ -14,6 +14,9 @@ What it does, when finished:
 
 [`docs/design.md`](docs/design.md) is the design. [`docs/compat.md`](docs/compat.md)
 lists what the module relies on from the server, Slack and the Pi cameras.
+[`docs/operations.md`](docs/operations.md) is for the admins who run it: health, the
+state file and its backup, the sweep, credentials. [`docs/testing.md`](docs/testing.md)
+covers the tests and the checklist on the test server.
 
 **Status: phase 3.** The module posts print starts and ends (with a camera still),
 printers waiting for a person, and printers that drop off mid-print to #bots.

@@ -994,7 +994,7 @@ as `[redacted]`, and a test checks this.
 | `slack` | acknowledging within 3 s, reconnect, 429, modals, upload, team and guest checks | a fake WebSocket and Web API |
 | `camera` | 200, 503, timeout, a public or Tailscale address, a redirect | `httptest` |
 | boundaries | the package table | `internal/arch` import test |
-| whole module | install, events, commands, the sweep | `make demo` (simulated printers), a test Slack app, a test denhac code. Checklist in `docs/testing.md` |
+| whole module | install, events, commands, the sweep | the test server's printers, the Slack app, a member who may sign up. Checklist in `docs/testing.md`. `make demo` (simulated printers) is not built |
 
 CI runs `go test -race`, a pinned `golangci-lint`, `govulncheck`, the arch test, and
 release builds for `linux/arm64` and `linux/amd64`.
