@@ -21,6 +21,7 @@ type accountServer struct {
 	passwords map[string]string
 	calls     []string
 	fail5xx   int
+	session   *Session
 }
 
 func (f *accountServer) start(t *testing.T) *Accounts {
@@ -104,6 +105,15 @@ func (f *accountServer) start(t *testing.T) *Accounts {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	mux.HandleFunc("POST /api/v1/server/backups", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"format":1,"id":"backup-20261126T170000Z","created_at":"2026-11-26T17:00:00Z",` +
+			`"files":[{"name":"config","size":1000},{"name":"host","size":2500}]}`))
+	})
+	mux.HandleFunc("GET /api/v1/server/backups", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":"backup-20261126T170000Z","created_at":"2026-11-26T17:00:00Z","files":[{"size":7}]}]`))
+	})
 	mux.HandleFunc("GET /api/v1/grants/subject/{subject}/direct", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 
@@ -122,6 +132,8 @@ func (f *accountServer) start(t *testing.T) *Accounts {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	f.session = session
 
 	return NewAccounts(session, "slackbot")
 }
@@ -263,5 +275,22 @@ func TestMakeAdminAndUnadmin(t *testing.T) {
 
 	if len(f.calls) != 0 {
 		t.Errorf("sent %v for the bot's own account", f.calls)
+	}
+}
+
+// TestBackups makes a backup and lists the kept ones, adding up file sizes.
+func TestBackups(t *testing.T) {
+	f := newAccountServer()
+	f.start(t)
+	b := NewBackups(f.session)
+
+	made, err := b.Create(context.Background())
+	if err != nil || made.ID != "backup-20261126T170000Z" || made.Files != 2 || made.Size != 3500 {
+		t.Fatalf("Create = %+v, %v", made, err)
+	}
+
+	list, err := b.List(context.Background())
+	if err != nil || len(list) != 1 || list[0].Size != 7 {
+		t.Errorf("List = %+v, %v", list, err)
 	}
 }

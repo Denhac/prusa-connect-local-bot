@@ -33,7 +33,7 @@
     "type": "section",
     "text": {
       "type": "mrkdwn",
-      "text": "*Admins*\n`/prusaconnect suspend [@user|username|member code] [reason]`  Turn an account off until an admin lifts it. Alone, lists the suspensions.\n`/prusaconnect unsuspend \u0026lt;@user|username|member code\u0026gt;`  Lift a suspension.\n`/prusaconnect lookup \u0026lt;@user|username|member code\u0026gt;`  Which member code, Slack user and account belong together.\n`/prusaconnect admin \u0026lt;@user|username|member code\u0026gt;`  Make a member's account an admin.\n`/prusaconnect unadmin \u0026lt;@user|username|member code\u0026gt;`  Take admin from an account the bot made an admin."
+      "text": "*Admins*\n`/prusaconnect suspend [@user|username|member code] [reason]`  Turn an account off until an admin lifts it. Alone, lists the suspensions.\n`/prusaconnect unsuspend \u0026lt;@user|username|member code\u0026gt;`  Lift a suspension.\n`/prusaconnect lookup \u0026lt;@user|username|member code\u0026gt;`  Which member code, Slack user and account belong together.\n`/prusaconnect admin \u0026lt;@user|username|member code\u0026gt;`  Make a member's account an admin.\n`/prusaconnect unadmin \u0026lt;@user|username|member code\u0026gt;`  Take admin from an account the bot made an admin.\n`/prusaconnect backup [list]`  Back up the printer server: its settings, accounts and this bot's records, kept on the Pi. list shows the ones kept."
     }
   },
   {

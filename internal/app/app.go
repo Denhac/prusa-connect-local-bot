@@ -27,6 +27,7 @@ import (
 	"github.com/prusa3d/prusa-connect/sdk/wire"
 	"github.com/prusa3d/prusa-connect/sdk/wirerpc"
 
+	"github.com/denhac/prusa-connect-local-bot/internal/auditlog"
 	"github.com/denhac/prusa-connect-local-bot/internal/camera"
 	"github.com/denhac/prusa-connect-local-bot/internal/connect"
 	"github.com/denhac/prusa-connect-local-bot/internal/domain"
@@ -42,7 +43,7 @@ import (
 // version is the manifest's version: manifest_test.go holds them together.
 const (
 	Name    = "slack-bot"
-	Version = extension.Version("0.9.1")
+	Version = extension.Version("0.10.0")
 )
 
 // Namespace is where the server mounts the module's routes: the module path
@@ -138,10 +139,13 @@ type module struct {
 	notifyOff   string
 	accounts    *domain.AccountsService
 	accountsOff string
-	access      domain.Access
-	session     *serverhttp.Session
-	cancel      context.CancelFunc
-	done        chan struct{}
+	// audit keeps the account lines in the data directory as well as the
+	// journal, which a Raspberry Pi usually holds in memory only.
+	audit   *auditlog.File
+	access  domain.Access
+	session *serverhttp.Session
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 func newModule(
@@ -257,7 +261,17 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 	poster := slackbot.NewPoster(slackConfig, m.log, m.now)
 	profiles := slackbot.NewProfiles(slackConfig, m.log, m.now)
 
-	accounts, err := m.newAccounts(values, session, profiles, state, saved, stateFail)
+	auditLog := m.log
+	if state != nil {
+		if file, err := auditlog.Open(grants.Data, auditlog.MaxSize); err != nil {
+			m.log.Warn("cannot open the audit file; account lines go to the journal only", "error", err)
+		} else {
+			m.audit = file
+			auditLog = slog.New(slog.NewMultiHandler(m.log.Handler(), slog.NewTextHandler(file, nil)))
+		}
+	}
+
+	accounts, err := m.newAccounts(values, session, profiles, state, saved, stateFail, auditLog)
 	if err != nil {
 		return err
 	}
@@ -304,7 +318,7 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 // setting of the wrong shape is an error.
 func (m *module) newAccounts(
 	values settings.Values, session *serverhttp.Session, profiles *slackbot.Profiles,
-	state *store.Store, saved store.State, stateFail string,
+	state *store.Store, saved store.State, stateFail string, auditLog *slog.Logger,
 ) (*domain.AccountsService, error) {
 	switch {
 	case values.AdminPassword.Empty():
@@ -331,7 +345,8 @@ func (m *module) newAccounts(
 	return domain.NewAccountsService(domain.AccountsConfig{
 		Verifier: verifier, Accounts: serverhttp.NewAccounts(session, values.AdminUsername),
 		Access: m.access, Directory: profiles, BotAccount: values.AdminUsername, LinkURL: link, AccountURL: account,
-		Now: m.now, Save: state.SaveAccounts, Log: m.log,
+		Now: m.now, Save: state.SaveAccounts, Log: auditLog,
+		Backups: serverhttp.NewBackups(session),
 		Sweep: domain.SweepConfig{
 			Interval: values.SweepInterval, MaxChanges: values.SweepMaxChanges, DeleteAfter: values.DeleteAfter,
 		},
@@ -432,6 +447,15 @@ func (m *module) stop() {
 	case <-done:
 	case <-time.After(stopWait):
 		m.log.Warn("the Slack connection did not close in time")
+	}
+
+	m.mu.Lock()
+	audit := m.audit
+	m.audit = nil
+	m.mu.Unlock()
+
+	if audit != nil {
+		_ = audit.Close()
 	}
 }
 

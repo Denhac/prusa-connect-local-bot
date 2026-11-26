@@ -73,6 +73,8 @@ them. Read the `[sdk]` lines of each release's `docs/CHANGELOG.md`.
 | `DELETE /api/v1/auth/accounts/{id}` | 204; 404 is taken as already gone. Only the sweep deletes, after `delete_after` lapsed |
 | `GET /api/v1/grants/subject/user:{id}/direct` | `{subject, items[]}`, each item `{object, relation, subject}`: the grants written on single printers for one account, on the printers the caller administers. An org role is not among them. The sweep only logs them |
 | `/settings/account` (web app) | the page where a person changes their own password, with the current one. The password window links to it under `public_url` |
+| `POST /api/v1/server/backups`, `GET /api/v1/server/backups` | the server's own backups, for `/prusaconnect backup`. 201 is the manifest: `id`, `created_at`, `files[]` with `size`. 404 while `core.upgrade.enabled` is off. In beta.2 an id looks like `20261126T163543Z-0.1.0-beta.2-to-unknown`, not the docs' `backup-…` |
+| `prusa-connect backup create -config <file> -json` (CLI) | the same backup, run as the server's user in its working directory by `deploy.sh backup`. Backups live in `<overlay dir>/upgrade/backups/<id>/`: `manifest.json`, `sqlite/*.db`, and `files/<source>/…`, such as `files/module-data/slack-bot/state.json`. The last 5 are kept (`core.upgrade.backup_retention`) |
 | `access.check` (wire) | `configure_resource` on `resource_kind`/`auth` for `user:<id>`, with `checks: [configure_resource]` and `check_absent_people: true`: whether a linked admin still administers the server |
 | `routes.serve` `GET /link` | the principal the host passes (`routesapi.PrincipalOf`); only `user:` principals get a code |
 

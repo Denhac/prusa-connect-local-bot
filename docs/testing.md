@@ -126,6 +126,17 @@ line says what to do, then what must happen.
 - [ ] Crash recovery: restart the server just after confirming a suspend. After the
       start the account is a viewer, and the journal is empty.
 
+### Files and backups
+
+- [ ] After an account change, `audit.log` in the data directory has its line, and the
+      line is still there after the Pi reboots.
+- [ ] With nothing happening for 30 minutes, `state.json` is written at most 3 or 4
+      times (its modification time).
+- [ ] `/prusaconnect backup` as an admin answers "Backup made" with an id. `backup list`
+      shows it. As a member, it is refused.
+- [ ] `deploy/deploy.sh backup rpi@<server> <dir>` saves an archive readable only by you
+      that holds `files/module-data/slack-bot/state.json` and `sqlite/host.db`.
+
 ### The sweep (phase 3)
 
 - [ ] After a start, `bot` shows a first full pass within a few minutes. The log has a

@@ -46,6 +46,9 @@ type AccountsConfig struct {
 	Log  *slog.Logger
 	// Sweep is how the membership sweep runs.
 	Sweep SweepConfig
+	// Backups are the server's own backups, for the backup command. Nil
+	// turns the command off.
+	Backups Backups
 }
 
 // AccountsService is the account half of the bot.
@@ -1576,3 +1579,92 @@ func (s *AccountsService) UnadminConfirm(ctx context.Context, it Interaction, ui
 	s.log.Info("admin taken away", "by", it.User, "member", rec.Username)
 	_ = ui.Respond(ctx, say(rec.Username+" is an operator again."))
 }
+
+// ----- backup --------------------------------------------------------------
+
+// backupWait bounds the server's making of a backup, which copies its
+// databases and module releases: some seconds on a Raspberry Pi.
+const backupWait = 2 * time.Minute
+
+// Backup makes a backup of the printer server, or with "list" shows the ones
+// it keeps. It answers through ui itself, after the work, on a clock of its
+// own: a backup may take longer than a command.
+func (s *AccountsService) Backup(ctx context.Context, r Request, args []string, ui UI) Message {
+	if refusal, ok := s.admin(ctx, r.User); !ok {
+		return refusal
+	}
+
+	if s.cfg.Backups == nil {
+		return say("Backups are off: the bot has no sign-in to the printer server.")
+	}
+
+	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), backupWait)
+	defer cancel()
+
+	if len(args) > 0 && strings.EqualFold(args[0], "list") {
+		_ = ui.Respond(work, s.backupList(work))
+
+		return Message{}
+	}
+
+	_ = ui.Respond(work, say("Making a backup of the printer server. It takes a few seconds."))
+
+	b, err := s.cfg.Backups.Create(work)
+
+	switch {
+	case errors.Is(err, ErrBackupsOff):
+		_ = ui.Respond(work, say("The printer server's backups are off (core.upgrade.enabled in its config)."))
+
+		return Message{}
+	case err != nil:
+		s.log.Warn("backup: the server could not make one", "by", r.User, "error", err)
+		_ = ui.Respond(work, say("The printer server could not make a backup. "+SlashCommand+" backup list shows "+
+			"whether it finished anyway; the server's log says why."))
+
+		return Message{}
+	}
+
+	s.log.Info("server backup made", "by", r.User, "backup", b.ID, "files", b.Files, "bytes", b.Size)
+
+	_ = ui.Respond(work, Message{
+		Title: "Backup made",
+		Lines: []string{
+			"It holds the server's settings and accounts, and this bot's records. It stays on the Pi, which keeps " +
+				"the last few; a copy off the Pi takes deploy/deploy.sh backup (docs/operations.md).",
+		},
+		Fields: []Field{
+			{Label: "Backup", Value: b.ID},
+			{Label: "Made", Value: clock(b.Created, s.cfg.Now())},
+			{Label: "Files", Value: fmt.Sprintf("%d, %s", b.Files, megabytes(b.Size))},
+		},
+	})
+
+	return Message{}
+}
+
+func (s *AccountsService) backupList(ctx context.Context) Message {
+	list, err := s.cfg.Backups.List(ctx)
+
+	switch {
+	case errors.Is(err, ErrBackupsOff):
+		return say("The printer server's backups are off (core.upgrade.enabled in its config).")
+	case err != nil:
+		return say("The bot cannot read the printer server's backups right now.")
+	case len(list) == 0:
+		return say("The printer server keeps no backups yet. " + SlashCommand + " backup makes one.")
+	}
+
+	sort.Slice(list, func(i, j int) bool { return list[i].Created.After(list[j].Created) })
+
+	msg := Message{Title: "Backups on the printer server"}
+	for _, b := range list {
+		msg.Fields = append(msg.Fields, Field{
+			Label: b.ID,
+			Value: clock(b.Created, s.cfg.Now()) + ", " + fmt.Sprintf("%d files, %s", b.Files, megabytes(b.Size)),
+		})
+	}
+
+	return msg
+}
+
+func megabytes(n int64) string { return fmt.Sprintf("%.1f MB", float64(n)/1e6) }

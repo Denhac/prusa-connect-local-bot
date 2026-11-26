@@ -76,6 +76,25 @@ type Accounts interface {
 	Unadmin(ctx context.Context, id, role string) error
 }
 
+// Backups are the server's own backups: its configuration, its databases and
+// every module's data directory. internal/serverhttp implements it.
+type Backups interface {
+	Create(ctx context.Context) (Backup, error)
+	List(ctx context.Context) ([]Backup, error)
+}
+
+// Backup is one backup the server made.
+type Backup struct {
+	ID      string
+	Created time.Time
+	Files   int
+	Size    int64
+}
+
+// ErrBackupsOff is a server whose backups are switched off
+// (core.upgrade.enabled is false).
+var ErrBackupsOff = errors.New("the server's backups are off")
+
 // Access asks the server who may do what. internal/connect implements it.
 type Access interface {
 	// IsServerAdmin is whether the subject may administer the server's

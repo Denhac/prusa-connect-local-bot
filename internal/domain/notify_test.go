@@ -231,7 +231,7 @@ func TestStartMessage(t *testing.T) {
 			t.Errorf("%s: posts %v, want %v", name, posts, c.posts)
 		}
 
-		if name == "after a gap" && (len(m.Lines) != 2 || !strings.HasPrefix(m.Lines[1], "It was not running from ")) {
+		if name == "after a gap" && (len(m.Lines) != 2 || !strings.HasPrefix(m.Lines[1], "It stopped some time after ")) {
 			t.Errorf("%s said %v", name, m.Lines)
 		}
 	}

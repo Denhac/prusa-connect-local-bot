@@ -4,6 +4,22 @@ Newest first. Each heading is a version in `module.yaml`. A change to what the
 module ships raises that version, so the server's Extensions page offers it as an
 update.
 
+## 0.10.0 - unreleased
+
+- Fewer writes to the Pi's SD card. The status part of the state file is written at once
+  only when a post, a thread or an open issue changes; its heartbeat and last-event time
+  wait up to 10 minutes, and are written when the module stops. A save that changes
+  nothing writes nothing. Idle, that is about 150 small writes a day instead of 1,440,
+  and a print no longer writes on every event.
+- After a crash, the start message says the bot "stopped some time after" its last
+  heartbeat.
+- `audit.log` in the data directory keeps the account lines (`component=audit`) over a
+  reboot, since the Pi's journal is in memory only. It moves to `audit.log.1` at 1 MB.
+- `/prusaconnect backup` (admins) makes the server's own backup of its settings,
+  accounts and every module's data, kept on the Pi; `backup list` shows the ones kept.
+- `deploy/deploy.sh backup HOST [DIR]` makes one and copies it off the Pi, readable
+  only by you. `docs/operations.md` says how to restore.
+
 ## 0.9.1 - unreleased
 
 - A window whose answer was ready at once (such as `jobs` for a printer with no

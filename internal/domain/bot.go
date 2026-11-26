@@ -110,6 +110,9 @@ func (b *Bot) handlers() map[string]handler {
 		"unadmin": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, _ UI) Message {
 			return a.Unadmin(ctx, r, args)
 		}),
+		"backup": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, ui UI) Message {
+			return a.Backup(ctx, r, args, ui)
+		}),
 	}
 }
 

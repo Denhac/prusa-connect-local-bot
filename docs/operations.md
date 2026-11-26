@@ -17,11 +17,13 @@ in the [README](../README.md#deploying), the settings are in its
 
   ```shell
   journalctl -u prusa-connect --since today | grep slack-bot
-  journalctl -u prusa-connect --since today | grep component=audit   # account changes only
   deploy/deploy.sh status rpi@<server>                                # from a checkout
   ```
 
-  No line ever holds a token or a password.
+  No line ever holds a token or a password. **On the Pi, the journal is kept in memory
+  only** (Raspberry Pi OS sets journald's `Storage=volatile`). That spares the SD card,
+  and every line is gone after a reboot. So the account lines (`component=audit`) are
+  also kept on disk; see [the audit log](#the-audit-log).
 
 ## What the bot changes, and what it never touches
 
@@ -34,66 +36,134 @@ in the [README](../README.md#deploying), the settings are in its
 - Every change is an audit line naming the account, and the admin when an admin asked.
   There is no audit channel in Slack.
 
-## The state file
+## The bot's files
 
-Everything the bot knows about members lives in one file:
+The bot keeps two files in its data directory. On a standard install that is:
 
 ```
-/var/lib/prusa-connect/config/config.d/module-data/slack-bot/state.json
+/var/lib/prusa-connect/config/config.d/module-data/slack-bot/
 ```
 
-That is the path on a standard install. The module logs its data directory when it
-starts ("the host granted a data directory"). The file holds:
+The module logs the path when it starts ("the host granted a data directory").
+
+### The state file, `state.json`
+
+It holds everything the bot knows about members:
 - each member code, its Slack user and its account
 - the suspensions
 - the admin links
 - the sweep's progress
 - the threads of the status messages
 
-It is written whole on every change, through a temporary file and a rename. So a plain
-copy is always a consistent one.
+It is written whole, through a temporary file and a rename, so a plain copy is always
+a consistent one. **Suspensions exist only in this file.** A suspended account is a
+viewer, the same as a lapsed one, and the server cannot tell the two apart.
 
-### Back it up
+### The audit log, `audit.log`
 
-**Suspensions exist only in this file.** A suspended account is a viewer, the same as
-a lapsed one, and the server cannot tell the two apart. Lose the file and the
-suspensions go with it.
-
-Copy it somewhere off the Pi, daily or after any suspension:
+One line for each account change, admin action, lookup and sweep pass, the same
+lines the journal has as `component=audit`. Unlike the journal, it survives a reboot.
 
 ```shell
-sudo cp /var/lib/prusa-connect/config/config.d/module-data/slack-bot/state.json \
-  /root/slack-bot-state-$(date +%F).json
+sudo tail -n 50 /var/lib/prusa-connect/config/config.d/module-data/slack-bot/audit.log
 ```
 
-It holds member codes, Slack user IDs and usernames. Keep the copies where only admins
-can read them.
+At 1 MB it moves to `audit.log.1`, and the one before that is deleted, so the two
+together hold a long history in at most 2 MB.
 
-### Restore it
+### What they write to the SD card
 
-1. Wait until nothing is printing, then stop the server: `sudo systemctl stop prusa-connect`.
-2. Copy the backup over `state.json`. Keep its owner (`prusa-connect`) and its mode.
-3. Start the server: `sudo systemctl start prusa-connect`.
+The SD card wears with every write, so the bot writes little:
+- **Status:** a post, a thread or an open issue is written at once, since a lost
+  one could repeat a post after a restart. The heartbeat and the time of the last
+  event are written at most every 10 minutes, and when the module stops. That is
+  about 150 small writes a day, instead of one a minute plus one for every printer
+  event.
+- **Accounts:** written when an account changes, a few times a day.
+- **The audit log:** appended a few lines a day.
+- **A save that would write what the file already holds** writes nothing.
 
-Stop the server first: the running module would overwrite the file on its next change.
+After a crash or a power cut, the start message says the bot "stopped some time
+after" its last heartbeat, which can be up to 10 minutes early.
 
-After a restore, anything done since the backup is missing from the file. Look up and
-redo it:
+The server writes more than the bot, mostly its access-control database
+(`authz.db-wal`). That is upstream, outside this module. Keep the journal volatile:
+`Storage=persistent` would put every log line of every service on the card.
+
+## Backups
+
+**The server makes its own backups.** Each one is a consistent snapshot of:
+- its configuration
+- its databases, the local accounts and their password hashes among them
+- every module's data directory, this bot's `state.json` and `audit.log` included
+
+The server keeps the last 5, on the Pi, in
+`/var/lib/prusa-connect/config/config.d/upgrade/backups/`. Each is about 20 MB,
+mostly module releases, so make them by hand rather than on a schedule.
+
+| to | do |
+|---|---|
+| Make one on the Pi now, from Slack | `/prusaconnect backup` (admins). `backup list` shows the ones kept |
+| Make one and copy it off the Pi | `deploy/deploy.sh backup rpi@<server> ~/backups`, from a checkout with SSH to the Pi |
+| Make one from the web app | Settings, Server, **Updates** |
+
+A backup on the Pi protects against a bad update or a mistake, but not against a dead
+SD card. **Copy one off the Pi**, after any suspension, and before any server update.
+`deploy.sh backup` saves `prusa-connect-<backup id>.tar.gz`, readable only by you. It
+holds password hashes: keep it where only admins can read it.
+
+### Restore the whole server
+
+This puts back every account, setting and module's data as they were at the backup.
+It follows the server's own steps (`prusa-connect backup restore`), which have not
+been tried on this server yet.
+
+1. Copy the archive to the Pi, and unpack it as the server's user into the backups
+   directory:
+
+   ```shell
+   sudo -u prusa-connect tar -xzf prusa-connect-<id>.tar.gz \
+     -C /var/lib/prusa-connect/config/config.d/upgrade/backups/
+   ```
+
+2. Wait until nothing is printing, then stop the server: `sudo systemctl stop prusa-connect`.
+3. Restore it:
+
+   ```shell
+   sudo -u prusa-connect sh -c 'cd /var/lib/prusa-connect &&
+     bin/prusa-connect backup restore <id> -config /etc/prusa-connect/config.yaml'
+   ```
+
+4. Start the server: `sudo systemctl start prusa-connect`.
+
+### Restore only the bot's records
+
+1. Take `files/module-data/slack-bot/state.json` out of the archive.
+2. Wait until nothing is printing, then stop the server. The running module would
+   overwrite the file on its next change.
+3. Copy it over `state.json` in the data directory. Keep its owner (`prusa-connect`)
+   and its mode (600).
+4. Start the server.
+
+### After a restore
+
+Anything done since the backup is missing from the bot's records. Look it up in
+`audit.log`, and redo it:
 - **Suspensions made since:** run `suspend` again for anyone who should still be
   suspended.
-- **Signups since:** those members' accounts are now drift. They claim them with
-  `/prusaconnect link`.
-- **Admins made with `admin` since:** these show as admins made by hand, which the bot
+- **Signups since** (only the bot's records restored): those accounts are now
+  drift. The members claim them with `/prusaconnect link`.
+- **Admins made with `admin` since:** they show as admins made by hand, which the bot
   no longer manages. Take admin away in the web app, or leave it.
 
-### If it is lost with no backup
+### If the bot's records are lost with no backup
 
 The module starts with an empty file. The server still has every account and role.
 - Members claim their accounts again with `/prusaconnect link`, which proves who they
   are by signing in.
 - Every suspension is gone. A suspended person who still qualifies could claim their
-  account and become an operator again. Re-run each suspension you still want, before
-  telling members to link.
+  account and become an operator again. Re-run each suspension you still want, from
+  `audit.log` if it survived, before telling members to link.
 - Admin links are gone too. Each admin runs `/prusaconnect link` once.
 
 ## Everyday admin tasks
@@ -104,6 +174,7 @@ the admin commands only once you are linked.
 
 | task | command |
 |---|---|
+| Back up the server and the bot's records | `backup`; see [Backups](#backups) |
 | Find out whose account something is | `lookup @someone`, `lookup <username>` or `lookup <member code>` |
 | Turn someone off at once, for a safety issue | `suspend @someone <reason>`. They stay a viewer while denhac still says ACTIVE, until you `unsuspend` them |
 | See who is suspended | `suspend` alone |

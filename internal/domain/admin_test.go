@@ -310,3 +310,58 @@ func TestIsAdmin(t *testing.T) {
 		t.Error("an admin the server no longer confirms is still one")
 	}
 }
+
+type fakeBackups struct {
+	made    []Backup
+	err     error
+	created int
+}
+
+func (f *fakeBackups) Create(context.Context) (Backup, error) {
+	if f.err != nil {
+		return Backup{}, f.err
+	}
+
+	f.created++
+	b := Backup{ID: "backup-1", Created: start, Files: 12, Size: 21_500_000}
+	f.made = append(f.made, b)
+
+	return b, nil
+}
+
+func (f *fakeBackups) List(context.Context) ([]Backup, error) { return f.made, f.err }
+
+// TestBackup makes a backup for an admin and lists the kept ones, refuses
+// anyone else, and says so when the server's backups are off.
+func TestBackup(t *testing.T) {
+	w := adminWorld(t)
+	backups := &fakeBackups{}
+	w.svc.cfg.Backups = backups
+
+	run := func(user string, args ...string) []Message {
+		ui := &fakeUI{}
+		if m := w.svc.Backup(context.Background(), Request{User: user}, args, ui); len(m.Lines) > 0 {
+			ui.said = append(ui.said, m)
+		}
+
+		return ui.said
+	}
+
+	if said := run("U-ABCD"); backups.created != 0 || len(said) != 1 || !strings.Contains(text(said[0]), "admin") {
+		t.Errorf("a member was answered %+v", said)
+	}
+
+	said := run("UADMIN")
+	if backups.created != 1 || len(said) != 2 || said[1].Title != "Backup made" || fieldOfMessage(said[1], "Files") != "12, 21.5 MB" {
+		t.Errorf("an admin was answered %+v", said)
+	}
+
+	if list := run("UADMIN", "list"); len(list) != 1 || len(list[0].Fields) != 1 || list[0].Fields[0].Label != "backup-1" {
+		t.Errorf("backup list answered %+v", list)
+	}
+
+	backups.err = ErrBackupsOff
+	if off := run("UADMIN"); !strings.Contains(text(off[len(off)-1]), "backups are off") {
+		t.Errorf("with backups off: %+v", off)
+	}
+}

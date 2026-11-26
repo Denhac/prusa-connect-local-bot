@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -13,8 +15,13 @@ import (
 
 // The pace of the status-message loop.
 const (
-	tickEvery    = 5 * time.Second
-	aliveEvery   = time.Minute
+	tickEvery  = 5 * time.Second
+	aliveEvery = time.Minute
+	// flushEvery is how often the state file is written when only its times
+	// changed. What matters for posting (threads, open issues, the version)
+	// is written at once; LastAlive and LastApplied wait, to spare the SD card
+	// a write every minute and every event.
+	flushEvery   = 10 * time.Minute
 	historyLimit = 50
 	// inQueue bounds the batches waiting for the loop. When it is full, a
 	// batch is dropped and the fleet read again, rather than the event reader
@@ -44,6 +51,10 @@ type notifyLoop struct {
 
 	mu     sync.Mutex
 	status domain.NotifyStatus
+
+	// saved is the last state written, without its times, and savedAt when.
+	saved   []byte
+	savedAt time.Time
 }
 
 func newNotifyLoop(
@@ -101,7 +112,7 @@ func (l *notifyLoop) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			<-reading
-			l.save()
+			l.flush()
 
 			return
 		case batch := <-l.in:
@@ -171,7 +182,7 @@ func (l *notifyLoop) announce(ctx context.Context) {
 	}
 
 	l.state.Version, l.state.LastAlive = l.version, now
-	l.save()
+	l.flush()
 }
 
 // rebuild reads the fleet and hands it to the reducer, which posts what
@@ -317,10 +328,44 @@ func (l *notifyLoop) still(ctx context.Context, device string, thread store.Thre
 	}
 }
 
+// save writes the state file when something that matters for posting
+// changed, or when only the times changed and flushEvery has passed.
 func (l *notifyLoop) save() {
 	l.state.Notify = l.reducer.State()
 
+	facts := l.facts()
+	if bytes.Equal(facts, l.saved) && l.now().Sub(l.savedAt) < flushEvery {
+		return
+	}
+
+	l.write(facts)
+}
+
+// flush writes the state file now, as the loop starts and stops.
+func (l *notifyLoop) flush() {
+	l.state.Notify = l.reducer.State()
+	l.write(l.facts())
+}
+
+func (l *notifyLoop) write(facts []byte) {
 	if err := l.store.SaveStatus(l.state); err != nil {
 		l.log.Error("could not save the state file", "error", err)
+
+		return
 	}
+
+	l.saved, l.savedAt = facts, l.now()
+}
+
+// facts is the state without its times.
+func (l *notifyLoop) facts() []byte {
+	st := l.state
+	st.LastAlive, st.LastApplied = time.Time{}, time.Time{}
+
+	data, err := json.Marshal(st)
+	if err != nil {
+		return nil // never equal to what was saved, so it is written
+	}
+
+	return data
 }

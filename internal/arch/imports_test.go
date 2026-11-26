@@ -35,6 +35,7 @@ var stdlibOnly = map[string][]string{
 	"internal/routes":     {"internal/domain"},
 	"internal/camera":     {"internal/domain"},
 	"internal/store":      {"internal/domain"},
+	"internal/auditlog":   {},
 	"internal/serverhttp": {"internal/domain", "internal/secret"},
 }
 

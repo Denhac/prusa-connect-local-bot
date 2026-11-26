@@ -531,7 +531,9 @@ func StartMessage(version, lastVersion string, lastAlive, now time.Time) (Messag
 
 	lines := []string{"🤖 Printer bot " + version + " started."}
 	if gap {
-		lines = append(lines, "It was not running from "+clock(lastAlive, now)+" to "+clock(now, now)+".")
+		// lastAlive reaches the disk only every few minutes, so after a crash
+		// it is when the bot was last seen, not the moment it stopped.
+		lines = append(lines, "It stopped some time after "+clock(lastAlive, now)+", and started again at "+clock(now, now)+".")
 	}
 
 	return Message{Lines: lines}, true

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "prusa-connect-local-bot",
-    "version": "0.9.1",
+    "version": "0.10.0",
     "description": "The routes of the Slack module. Every path is relative to the mount the host assigns, /api/v1/modules/<namespace>, and the host serves this document rebased under it at <mount>/openapi.json."
   },
   "paths": {

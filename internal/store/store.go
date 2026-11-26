@@ -9,6 +9,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +42,9 @@ type Thread struct {
 type Status struct {
 	// Version is the module version that last wrote the file.
 	Version string `json:"version,omitempty"`
-	// LastAlive is written every minute while the module runs.
+	// LastAlive is when the module was last known to run. It is kept every
+	// minute in memory and reaches the file at most every 10 minutes, and when
+	// the module stops (internal/app, flushEvery).
 	LastAlive time.Time `json:"last_alive,omitzero"`
 	// LastApplied is when the last event applied was published.
 	LastApplied time.Time `json:"last_applied,omitzero"`
@@ -70,6 +73,9 @@ type Store struct {
 	mu       sync.Mutex
 	status   json.RawMessage
 	accounts json.RawMessage
+	// written is what the file holds now, so a save that changes nothing
+	// does not write the SD card again.
+	written []byte
 }
 
 // Open reads the state file in dir, or answers an empty state when there is
@@ -162,6 +168,11 @@ func (s *Store) write() error {
 		return fmt.Errorf("store: encode: %w", err)
 	}
 
+	data = append(data, '\n')
+	if bytes.Equal(data, s.written) {
+		return nil
+	}
+
 	dir := filepath.Dir(s.path)
 
 	tmp, err := os.CreateTemp(dir, FileName+".*")
@@ -171,7 +182,7 @@ func (s *Store) write() error {
 
 	defer os.Remove(tmp.Name()) //nolint:errcheck // gone after the rename; this only cleans up a failure.
 
-	if _, err = tmp.Write(append(data, '\n')); err == nil {
+	if _, err = tmp.Write(data); err == nil {
 		err = tmp.Sync()
 	}
 
@@ -191,6 +202,8 @@ func (s *Store) write() error {
 		_ = d.Sync() // the rename is durable once the directory is
 		_ = d.Close()
 	}
+
+	s.written = data
 
 	return nil
 }

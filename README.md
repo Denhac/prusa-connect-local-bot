@@ -113,9 +113,10 @@ each token comes from.
 | `internal/slack` | Socket Mode, the Web API and Block Kit. The only package using slack-go |
 | `internal/connect` | the server, through its SDK: the fleet, jobs and the event stream |
 | `internal/camera` | stills from the Pi camera API (the optional override) |
-| `internal/serverhttp` | the server's HTTP API, signed in as the bot's account: camera stills and accounts |
+| `internal/serverhttp` | the server's HTTP API, signed in as the bot's account: camera stills, accounts and the server's backups |
 | `internal/verify` | denhac's scheme: the Slack profile fields and the member page |
 | `internal/store` | the state file in the module's data directory |
+| `internal/auditlog` | `audit.log` in the data directory: the account lines, kept over a reboot |
 | `internal/routes` | the module's HTTP routes on the server (`GET /status`) |
 | `internal/settings` | the settings and their checks |
 | `internal/secret` | a credential type that never prints its value |

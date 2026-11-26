@@ -4,6 +4,7 @@
 #
 #   deploy/deploy.sh push HOST [RELEASE_DIR]   copy a release (default: the newest in bin/release)
 #   deploy/deploy.sh status HOST               the module's recent lines in the server's journal
+#   deploy/deploy.sh backup HOST [DIR]         make a server backup on HOST and copy it into DIR (default .)
 #
 # HOST is what ssh takes, such as rpi@printserver.
 #
@@ -11,6 +12,13 @@
 # names (README.md, "Deploying"). The running module is not touched: an admin
 # then chooses Install or Update on the server's Extensions page. The release
 # that was there before is kept beside it as <dir>.previous.
+#
+# backup runs the server's own `prusa-connect backup create`, a consistent
+# snapshot of its configuration, its databases (the accounts among them) and
+# every module's data directory, this bot's state file and audit log included.
+# It then copies that backup off the Pi as DIR/prusa-connect-<backup id>.tar.gz,
+# readable only by you: it holds password hashes. docs/operations.md says how
+# to restore one.
 #
 # Environment:
 #   SSHPASS           the login password, when the host has no SSH key for you (needs sshpass)
@@ -20,15 +28,23 @@
 #                     (default /var/lib/prusa-connect/modules-local/slack-bot)
 #   SERVER_USER       the user the server runs as (default prusa-connect)
 #   SERVER_UNIT       the server's systemd unit (default prusa-connect)
+#   SERVER_HOME       the server's working directory (default /var/lib/prusa-connect)
+#   SERVER_BIN        the server's binary (default $SERVER_HOME/bin/prusa-connect)
+#   SERVER_CONFIG     its configuration file (default /etc/prusa-connect/config.yaml)
+#   BACKUP_ROOT       where it keeps backups (default $SERVER_HOME/config/config.d/upgrade/backups)
 set -eu
 
 DEST=${MODULES_LOCAL_DIR:-/var/lib/prusa-connect/modules-local/slack-bot}
 OWNER=${SERVER_USER:-prusa-connect}
 UNIT=${SERVER_UNIT:-prusa-connect}
+HOME_DIR=${SERVER_HOME:-/var/lib/prusa-connect}
+BIN=${SERVER_BIN:-$HOME_DIR/bin/prusa-connect}
+CONFIG=${SERVER_CONFIG:-/etc/prusa-connect/config.yaml}
+BACKUPS=${BACKUP_ROOT:-$HOME_DIR/config/config.d/upgrade/backups}
 
 fail() { echo "deploy.sh: $*" >&2; exit 1; }
 
-usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 # remote runs a command on HOST, checking the host key strictly.
 remote() {
@@ -85,6 +101,41 @@ push() {
 	echo "Now open the server's Extensions page and choose Install or Update for the Slack bot."
 }
 
+# sudoed runs a shell command as root on HOST. The sudo password goes on the
+# first line of standard input, never on a command line.
+sudoed() {
+	host=$1; script=$2
+	printf '%s\n' "${PI_SUDO_PASSWORD:-${SSHPASS:-}}" | remote "$host" "
+		set -e
+		IFS= read -r pw
+		printf '%s\n' \"\$pw\" | sudo -S -p '' -v 2>/dev/null || sudo -n -v
+		$script
+	"
+}
+
+backup() {
+	host=$1; out=$2
+	[ -d "$out" ] || fail "$out is not a directory"
+
+	echo "making a server backup on $host (this copies its databases and module releases: some seconds)"
+	answer=$(sudoed "$host" "sudo -n -u '$OWNER' sh -c \"cd '$HOME_DIR' && exec '$BIN' backup create -config '$CONFIG' -json\"") ||
+		fail "the server could not make a backup"
+	# The manifest's first "id" is the backup's; its files carry names, not ids.
+	id=$(printf '%s' "$answer" | grep -o '"id": *"[^"/]*"' | head -n 1 | sed 's/.*: *"\([^"]*\)"/\1/')
+	[ -n "$id" ] || fail "the server's answer named no backup"
+
+	file="$out/prusa-connect-$id.tar.gz"
+	umask 077
+	sudoed "$host" "sudo -n tar -C '$BACKUPS' -czf - '$id'" >"$file.part" || {
+		rm -f "$file.part"
+		fail "could not copy $id from $host"
+	}
+	mv "$file.part" "$file"
+
+	echo "saved $file ($(du -h "$file" | cut -f1)), readable only by you: it holds password hashes."
+	echo "The server keeps $id on the Pi too, with the last few. docs/operations.md says how to restore."
+}
+
 status() {
 	host=$1
 	remote "$host" "journalctl -u '$UNIT' --since '-30 min' --no-pager -o short-iso 2>/dev/null |
@@ -93,10 +144,14 @@ status() {
 }
 
 [ $# -ge 2 ] || usage
+
+# A backup's DIR is where you are, not the repository.
+out=$(cd "${3:-.}" 2>/dev/null && pwd) || out=${3:-.}
 cd "$(dirname "$0")/.."
 
 case $1 in
 push) shift; push "$@" ;;
 status) shift; status "$1" ;;
+backup) backup "$2" "$out" ;;
 *) usage ;;
 esac

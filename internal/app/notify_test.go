@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -160,5 +162,56 @@ func TestReceiveNeverBlocks(t *testing.T) {
 
 	if !l.resync.Load() {
 		t.Error("a full queue did not ask for a resync")
+	}
+}
+
+// TestTheLoopSparesTheCard writes the state file at once when what matters
+// for posting changes, and when only its times change, at most every
+// flushEvery.
+func TestTheLoopSparesTheCard(t *testing.T) {
+	dir := t.TempDir()
+	l := loopOver(t, dir, printing{}, nil)
+
+	clock := at
+	l.now = func() time.Time { return clock }
+
+	path := filepath.Join(dir, store.FileName)
+	writes := func() time.Time {
+		info, err := os.Stat(path)
+		if err != nil {
+			return time.Time{}
+		}
+
+		return info.ModTime()
+	}
+
+	l.flush()
+	old := at.Add(-time.Hour)
+	_ = os.Chtimes(path, old, old) // a mark: a new write moves it
+
+	for range 9 { // nine minutes of heartbeats
+		clock = clock.Add(time.Minute)
+		l.state.LastAlive = clock
+		l.save()
+	}
+
+	if !writes().Equal(old) {
+		t.Fatal("a heartbeat was written before flushEvery")
+	}
+
+	l.state.Threads = map[string]store.Thread{"job/1": {Channel: "C0BOTS", TS: "1.2"}}
+	l.save()
+
+	if writes().Equal(old) {
+		t.Fatal("a new thread was not written at once")
+	}
+
+	_ = os.Chtimes(path, old, old)
+	clock = clock.Add(flushEvery)
+	l.state.LastAlive = clock
+	l.save()
+
+	if writes().Equal(old) {
+		t.Error("the heartbeat was not written after flushEvery")
 	}
 }

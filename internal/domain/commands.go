@@ -83,6 +83,7 @@ func Commands() []Command {
 		{Name: "lookup", Usage: who, Summary: "Which member code, Slack user and account belong together.", Who: Admins, Group: groupAdmins},
 		{Name: "admin", Usage: who, Summary: "Make a member's account an admin.", Who: Admins, Group: groupAdmins},
 		{Name: "unadmin", Usage: who, Summary: "Take admin from an account the bot made an admin.", Who: Admins, Group: groupAdmins},
+		{Name: "backup", Usage: "[list]", Summary: "Back up the printer server: its settings, accounts and this bot's records, kept on the Pi. list shows the ones kept.", Who: Admins, Group: groupAdmins},
 		{Name: "help", Summary: "This list.", Who: Anyone, Group: groupBot},
 		{Name: "bot", Summary: "How the bot itself is doing.", Who: Anyone, Group: groupBot},
 	}

@@ -107,3 +107,40 @@ func TestRefusesBrokenJSON(t *testing.T) {
 		t.Error("opened a broken file")
 	}
 }
+
+// TestAnUnchangedSaveWritesNothing leaves the file alone when a save would
+// write what it holds already.
+func TestAnUnchangedSaveWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+
+	s, st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st.Status.Version = "1.0.0"
+	if err := s.SaveStatus(st.Status); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(dir, FileName)
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	_ = os.Chtimes(path, old, old)
+
+	if err := s.SaveStatus(st.Status); err != nil {
+		t.Fatal(err)
+	}
+
+	if info, _ := os.Stat(path); !info.ModTime().Equal(old) {
+		t.Error("an unchanged save wrote the file")
+	}
+
+	st.Status.Version = "1.0.1"
+	if err := s.SaveStatus(st.Status); err != nil {
+		t.Fatal(err)
+	}
+
+	if info, _ := os.Stat(path); info.ModTime().Equal(old) {
+		t.Error("a changed save did not write the file")
+	}
+}

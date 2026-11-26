@@ -342,7 +342,7 @@ One `errgroup`, cancelled by `plugin.shutdown`, SIGTERM or SIGINT.
 | account writer | **the only code that changes accounts.** It works through the journal one entry at a time |
 | sweep | looks every hour: a full pass every `sweep_interval`, rechecks, deletions. It reads the member pages without the writer's lock, then takes it to apply |
 
-**On shutdown:** flush the state file (it is written on every change anyway), close the
+**On shutdown:** flush the state file (its times are otherwise written every 10 minutes), close the
 Slack connection within at most 2 s, and return. All of it fits in the host's 5 s.
 There is no "stopping" message: a settings edit restarts the module, so it would post
 on every edit. The start message after a gap says the same, and only when it matters.
@@ -873,8 +873,15 @@ the first install. Changing it later means a reinstall and a new data directory.
 
 ## State
 
-`<data dir>/state.json` is rewritten on every change: to a temporary file, synced,
-then renamed. Two owners write it, the status loop and the account service. Each saves
+`<data dir>/state.json` is rewritten through a temporary file, synced, then renamed.
+To spare the SD card (0.10.0), the status loop writes what matters for posting
+(threads, open issues, the version) at once, but its two times (`last_alive`,
+`last_applied`) at most every 10 minutes and when it stops. A save that would write
+what the file holds writes nothing. Beside it, `audit.log` (`internal/auditlog`) keeps
+the `component=audit` lines over a reboot, since the Pi's journal is in memory only.
+It is appended, never synced line by line, and moves to `audit.log.1` at 1 MB.
+Backups are the server's own (`prusa-connect backup create`, or `/prusaconnect
+backup`), which take the whole data directory; docs/operations.md, "Backups". Two owners write it, the status loop and the account service. Each saves
 only its own part (`status` and `accounts`), encoded while that owner holds its own
 lock, so neither can race the other. Since 0.3.0 the file is schema 2:
 `{"schema": 2, "status": {…}, "accounts": {…}}`. Schema 1 (0.2.x, with the status
