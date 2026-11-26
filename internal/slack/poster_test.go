@@ -3,12 +3,16 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/slack-go/slack"
 
 	"github.com/denhac/prusa-connect-local-bot/internal/domain"
 	"github.com/denhac/prusa-connect-local-bot/internal/secret"
@@ -144,5 +148,23 @@ func TestWaitHonoursTheContext(t *testing.T) {
 
 	if _, err := p.Post(ctx, "C1", domain.Message{Lines: []string{"x"}}); err == nil {
 		t.Error("posted although the context ended first")
+	}
+}
+
+// TestChannelErr marks not_in_channel, however slack-go wraps it, and leaves
+// other errors alone.
+func TestChannelErr(t *testing.T) {
+	for _, err := range []error{
+		slack.SlackErrorResponse{Err: "not_in_channel"},
+		fmt.Errorf("CompleteUploadExternal: %w", slack.SlackErrorResponse{Err: "not_in_channel"}),
+		errors.New("not_in_channel"),
+	} {
+		if !errors.Is(channelErr(err), domain.ErrNotInChannel) {
+			t.Errorf("%v is not marked", err)
+		}
+	}
+
+	if errors.Is(channelErr(errors.New("channel_not_found")), domain.ErrNotInChannel) {
+		t.Error("channel_not_found is marked")
 	}
 }

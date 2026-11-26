@@ -41,6 +41,28 @@ func Render(m domain.Message) []slack.Block {
 		blocks = append(blocks, slack.NewSectionBlock(nil, fields, nil))
 	}
 
+	if m.Link != "" {
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject(slack.MarkdownType, "<"+escape(m.Link)+">", false, false), nil, nil))
+	}
+
+	if len(m.Buttons) > 0 {
+		elements := make([]slack.BlockElement, 0, len(m.Buttons))
+
+		for _, b := range m.Buttons {
+			button := slack.NewButtonBlockElement(b.Action, b.Value, plain(b.Label))
+			if b.Danger {
+				button.Style = slack.StyleDanger
+			} else {
+				button.Style = slack.StylePrimary
+			}
+
+			elements = append(elements, button)
+		}
+
+		blocks = append(blocks, slack.NewActionBlock("", elements...))
+	}
+
 	if m.Footer != "" {
 		blocks = append(blocks, slack.NewContextBlock("", plain(m.Footer)))
 	}

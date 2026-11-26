@@ -52,6 +52,8 @@ type Health struct {
 	Started    time.Time    `json:"started"`
 	Slack      SlackStatus  `json:"slack"`
 	Notify     NotifyStatus `json:"notify"`
+	// Accounts says whether the account features are on, or why not.
+	Accounts string `json:"accounts,omitempty"`
 	// Missing names the settings the module still needs.
 	Missing []string `json:"missing,omitempty"`
 }
@@ -68,6 +70,7 @@ func BotStatus(ctx context.Context, health Health, fleet Fleet, now time.Time) M
 		{Label: "Running for", Value: since(now, health.Started)},
 		{Label: "Slack", Value: slackLine(health.Slack, now)},
 		{Label: "Status messages", Value: notifyLine(health.Notify, now)},
+		{Label: "Accounts", Value: health.Accounts},
 		{Label: "Printers", Value: printersLine(ctx, fleet)},
 	}
 

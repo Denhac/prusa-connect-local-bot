@@ -29,7 +29,7 @@ const (
 type notifyLoop struct {
 	log     *slog.Logger
 	store   *store.Store
-	state   store.State
+	state   store.Status
 	reducer *domain.Notifier
 	fleet   domain.Fleet
 	events  domain.Events
@@ -47,7 +47,7 @@ type notifyLoop struct {
 }
 
 func newNotifyLoop(
-	log *slog.Logger, s *store.Store, st store.State, cfg domain.NotifyConfig,
+	log *slog.Logger, s *store.Store, st store.Status, cfg domain.NotifyConfig,
 	fleet domain.Fleet, events domain.Events, chat domain.Chat, stills domain.Stills,
 	channel, version string, now func() time.Time,
 ) *notifyLoop {
@@ -320,7 +320,7 @@ func (l *notifyLoop) still(ctx context.Context, device string, thread store.Thre
 func (l *notifyLoop) save() {
 	l.state.Notify = l.reducer.State()
 
-	if err := l.store.Save(l.state); err != nil {
+	if err := l.store.SaveStatus(l.state); err != nil {
 		l.log.Error("could not save the state file", "error", err)
 	}
 }

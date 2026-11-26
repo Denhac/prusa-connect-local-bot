@@ -92,7 +92,7 @@ func loopOver(t *testing.T, dir string, fleet domain.Fleet, chat domain.Chat) *n
 		t.Fatal(err)
 	}
 
-	return newNotifyLoop(slog.New(slog.DiscardHandler), s, st, domain.DefaultNotifyConfig(),
+	return newNotifyLoop(slog.New(slog.DiscardHandler), s, st.Status, domain.DefaultNotifyConfig(),
 		fleet, noEvents{}, chat, oneCamera{}, "C0BOTS", "0.2.0", func() time.Time { return at })
 }
 

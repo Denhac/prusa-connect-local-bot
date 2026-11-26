@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,7 +72,7 @@ func (p *Poster) send(ctx context.Context, channel, thread string, m domain.Mess
 		return err //nolint:wrapcheck // wrapped once, below.
 	})
 	if err != nil {
-		return "", fmt.Errorf("chat.postMessage: %w", err)
+		return "", fmt.Errorf("chat.postMessage: %w", channelErr(err))
 	}
 
 	return ts, nil
@@ -109,10 +110,22 @@ func (p *Poster) Upload(ctx context.Context, channel, thread string, jpeg []byte
 		return err //nolint:wrapcheck // wrapped once, below.
 	})
 	if err != nil {
-		return fmt.Errorf("file upload: %w", err)
+		return fmt.Errorf("file upload: %w", channelErr(err))
 	}
 
 	return nil
+}
+
+// channelErr marks Slack's not_in_channel as domain.ErrNotInChannel, so the
+// answer can say to invite the bot.
+func channelErr(err error) error {
+	var slackErr slack.SlackErrorResponse
+	if (errors.As(err, &slackErr) && slackErr.Err == "not_in_channel") ||
+		strings.HasSuffix(err.Error(), "not_in_channel") {
+		return fmt.Errorf("%w: %w", domain.ErrNotInChannel, err)
+	}
+
+	return err
 }
 
 // paced runs one call no sooner than spacing after the last call to the same

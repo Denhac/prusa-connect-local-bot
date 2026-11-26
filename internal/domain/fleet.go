@@ -159,3 +159,6 @@ type Chat interface {
 	// Upload shares a JPEG in a channel, in a thread when thread is set.
 	Upload(ctx context.Context, channel, thread string, jpeg []byte, title string) error
 }
+
+// ErrNotInChannel is a channel the bot cannot post in until someone invites it.
+var ErrNotInChannel = errors.New("the bot is not in the channel")

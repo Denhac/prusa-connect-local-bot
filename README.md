@@ -15,9 +15,14 @@ What it does, when finished:
 [`docs/design.md`](docs/design.md) is the design. [`docs/compat.md`](docs/compat.md)
 lists what the module relies on from the server, Slack and the Pi cameras.
 
-**Status: phase 1.** The module posts print starts and ends (with a camera still),
-printers waiting for a person, and printers that drop off mid-print to #bots. It answers
-`/prusaconnect help`, `bot`, and, in #bots, `status`, `jobs` and `snap`.
+**Status: phase 2.** The module posts print starts and ends (with a camera still),
+printers waiting for a person, and printers that drop off mid-print to #bots.
+- **For everyone:** `/prusaconnect help` and `bot`.
+- **In #bots:** `status`, `jobs` and `snap`.
+- **For denhac members:** `signup`, `password`, `whoami` and `link`.
+- **For admins:** `suspend`, `unsuspend` and `lookup`.
+
+The sweep that turns off former members comes in phase 3.
 
 ## Building
 
@@ -78,7 +83,9 @@ the module runs idle and lists what is missing, in `/prusaconnect bot` and at `G
 | `allow_guests` | whether Slack guest accounts may use the command (default `false`) |
 | `server_url` | where the bot signs in to the server's API (default `http://127.0.0.1:8080`). Plain http only to loopback; never a Tailscale address |
 | `admin_username` | the bot's own account on the server (default `slackbot`) |
-| `admin_password` | that account's password (secret). Camera stills from the server need it |
+| `admin_password` | that account's password (secret). Camera stills and every account feature need it |
+| `public_url` | where people open the printer server in a browser, for the page `link` sends them to. Never a Tailscale address |
+| `verify` | where the membership facts are: `member_field` (default `Member`), `code_field` (`Member Code URL`), `member_url` (`https://denhac.org/member/`) and `authorization` (`3D Printer User`) |
 | `cameras` | optional: a printer's own Pi camera still address, by printer id, used before the server's camera and letting `snap` wait for a fresh picture: `{"<printer id>": "http://<Pi LAN address>:8555/v1/cameras/cam0/still"}`. LAN addresses only |
 | `issue_reasons` | the server's issue reasons that mean a printer needs a person (default `["awaiting_operator"]`) |
 
@@ -95,7 +102,8 @@ each token comes from.
 | `internal/slack` | Socket Mode, the Web API and Block Kit. The only package using slack-go |
 | `internal/connect` | the server, through its SDK: the fleet, jobs and the event stream |
 | `internal/camera` | stills from the Pi camera API (the optional override) |
-| `internal/serverhttp` | the server's HTTP API, signed in as the bot's account: camera stills now, accounts in phase 2 |
+| `internal/serverhttp` | the server's HTTP API, signed in as the bot's account: camera stills and accounts |
+| `internal/verify` | denhac's scheme: the Slack profile fields and the member page |
 | `internal/store` | the state file in the module's data directory |
 | `internal/routes` | the module's HTTP routes on the server (`GET /status`) |
 | `internal/settings` | the settings and their checks |
@@ -111,6 +119,7 @@ each token comes from.
 |---|---|
 | `github.com/prusa3d/prusa-connect/sdk` | the server's extension SDK: the module wire and its clients |
 | `github.com/slack-go/slack` | the Slack Web API, Socket Mode and Block Kit types |
+| `golang.org/x/net` | `html`, to read denhac's member pages |
 | `gopkg.in/yaml.v3` | tests only: parses `module.yaml` with the same parser the server uses |
 
 Versions are exact in `go.mod`, and a new dependency gets a line here.

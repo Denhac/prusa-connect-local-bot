@@ -20,9 +20,10 @@ import (
 // be refused again, so the caller stops until the settings change.
 var ErrAuth = errors.New("slack refused the token")
 
-// Handler answers one command.
+// Handler answers commands, clicks and window submits.
 type Handler interface {
-	Handle(ctx context.Context, r domain.Request) domain.Message
+	Handle(ctx context.Context, r domain.Request, ui domain.UI)
+	Interact(ctx context.Context, it domain.Interaction, ui domain.UI)
 }
 
 // Config is what the runner needs from the settings.
@@ -231,7 +232,22 @@ func (r *Runner) dispatch(ctx context.Context, client *socketmode.Client, api *s
 		if ok {
 			r.start(ctx, api, cmd)
 		}
-	case socketmode.EventTypeInteractive, socketmode.EventTypeEventsAPI:
+	case socketmode.EventTypeInteractive:
+		cb, ok := ev.Data.(slack.InteractionCallback)
+		if ok && cb.Type == slack.InteractionTypeViewSubmission && ev.Request != nil {
+			// Keep the window open, showing that the bot is at work; the
+			// answer replaces it.
+			if err := client.Ack(*ev.Request, slack.NewUpdateViewSubmissionResponse(working())); err != nil {
+				r.log.Warn("could not acknowledge a window's submit", "error", err)
+			}
+		} else {
+			r.ack(client, ev)
+		}
+
+		if ok && (cb.Type == slack.InteractionTypeViewSubmission || cb.Type == slack.InteractionTypeBlockActions) {
+			r.interact(ctx, api, cb)
+		}
+	case socketmode.EventTypeEventsAPI:
 		r.ack(client, ev)
 	}
 }
@@ -246,12 +262,12 @@ func (r *Runner) ack(client *socketmode.Client, ev socketmode.Event) {
 	}
 }
 
-// start answers one command in its own goroutine, within the bound.
-func (r *Runner) start(ctx context.Context, api *slack.Client, cmd slack.SlashCommand) {
+// work runs one command or click in its own goroutine, within the bound.
+func (r *Runner) work(ctx context.Context, u ui, run func(context.Context)) {
 	select {
 	case r.slots <- struct{}{}:
 	default:
-		r.respond(ctx, cmd.ResponseURL, domain.Message{Lines: []string{"The bot is busy. Try again in a moment."}})
+		_ = u.Respond(ctx, domain.Message{Lines: []string{"The bot is busy. Try again in a moment."}})
 
 		return
 	}
@@ -262,42 +278,93 @@ func (r *Runner) start(ctx context.Context, api *slack.Client, cmd slack.SlashCo
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
 		defer cancel()
 
-		r.respond(ctx, cmd.ResponseURL, r.answer(ctx, api, cmd))
+		run(ctx)
 	})
 }
 
-// answer checks who is asking and then asks the handler. Only the command's
-// first word is logged, never its arguments.
-func (r *Runner) answer(ctx context.Context, api *slack.Client, cmd slack.SlashCommand) domain.Message {
-	name, _ := domain.Parse(cmd.Text)
-	log := r.log.With("user", cmd.UserID, "command", name)
+// start answers one command.
+func (r *Runner) start(ctx context.Context, api *slack.Client, cmd slack.SlashCommand) {
+	u := ui{api: api, http: r.http, responseURL: cmd.ResponseURL, trigger: cmd.TriggerID, user: cmd.UserID}
+
+	r.work(ctx, u, func(ctx context.Context) {
+		if refusal, ok := r.answer(ctx, api, cmd.TeamID, cmd.UserID, cmd.Text); !ok {
+			_ = u.Respond(ctx, refusal)
+
+			return
+		}
+
+		r.handler.Handle(ctx, domain.Request{User: cmd.UserID, Channel: cmd.ChannelID, Text: cmd.Text}, u)
+	})
+}
+
+// interact answers a click or a window's submit.
+func (r *Runner) interact(ctx context.Context, api *slack.Client, cb slack.InteractionCallback) {
+	u := ui{api: api, http: r.http, responseURL: cb.ResponseURL, trigger: cb.TriggerID, user: cb.User.ID, replace: true}
+	it := domain.Interaction{User: cb.User.ID}
+
+	switch cb.Type {
+	case slack.InteractionTypeBlockActions:
+		if len(cb.ActionCallback.BlockActions) == 0 {
+			return
+		}
+
+		it.Action, it.Value = cb.ActionCallback.BlockActions[0].ActionID, cb.ActionCallback.BlockActions[0].Value
+	case slack.InteractionTypeViewSubmission:
+		it.Callback, it.Meta, it.ModalID = cb.View.CallbackID, cb.View.PrivateMetadata, cb.View.ID
+		it.Inputs = map[string]string{}
+
+		if cb.View.State != nil {
+			for _, actions := range cb.View.State.Values {
+				for id, action := range actions {
+					it.Inputs[id] = action.Value
+				}
+			}
+		}
+	}
+
+	r.work(ctx, u, func(ctx context.Context) {
+		if refusal, ok := r.answer(ctx, api, cb.Team.ID, cb.User.ID, "click"); !ok {
+			_ = u.Respond(ctx, refusal)
+
+			return
+		}
+
+		r.handler.Interact(ctx, it, u)
+	})
+}
+
+// answer checks who is asking. Only the command's first word is logged,
+// never its arguments.
+func (r *Runner) answer(ctx context.Context, api *slack.Client, teamID, user, text string) (domain.Message, bool) {
+	name, _ := domain.Parse(text)
+	log := r.log.With("user", user, "command", name)
 
 	r.mu.Lock()
 	team := r.team
 	r.mu.Unlock()
 
-	if cmd.TeamID != team {
-		log.Warn("refused a command from another workspace", "team_id", cmd.TeamID)
+	if teamID != team {
+		log.Warn("refused a request from another workspace", "team_id", teamID)
 
-		return domain.Message{Lines: []string{"This bot answers only in its own workspace."}}
+		return domain.Message{Lines: []string{"This bot answers only in its own workspace."}}, false
 	}
 
-	refused, err := r.guest(ctx, api, cmd.UserID)
+	refused, err := r.guest(ctx, api, user)
 	if err != nil {
 		log.Warn("could not read the Slack user", "error", err)
 
-		return domain.Message{Lines: []string{"The bot cannot check your Slack account right now. Try again later."}}
+		return domain.Message{Lines: []string{"The bot cannot check your Slack account right now. Try again later."}}, false
 	}
 
 	if refused {
-		log.Info("refused a command from a guest")
+		log.Info("refused a request from a guest")
 
-		return domain.Message{Lines: []string{"Guest accounts cannot use this bot."}}
+		return domain.Message{Lines: []string{"Guest accounts cannot use this bot."}}, false
 	}
 
-	log.Info("answering a command")
+	log.Info("answering")
 
-	return r.handler.Handle(ctx, domain.Request{User: cmd.UserID, Channel: cmd.ChannelID, Text: cmd.Text})
+	return domain.Message{}, true
 }
 
 // guest reports whether the user is refused for being a guest, or for being a

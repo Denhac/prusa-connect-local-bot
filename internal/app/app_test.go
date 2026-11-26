@@ -47,7 +47,7 @@ func host(t *testing.T) (*wirerpc.Conn, *module) {
 	t.Cleanup(cancel)
 
 	hostSide, childSide := net.Pipe()
-	m := newModule(slog.New(slog.DiscardHandler), openAPI, noFleet{}, noEvents{}, time.Now)
+	m := newModule(slog.New(slog.DiscardHandler), openAPI, noFleet{}, noEvents{}, nil, time.Now)
 
 	child, err := wirerpc.NewConn(childSide, wirerpc.Options{Role: wirerpc.RoleChild, Methods: m.methods()})
 	if err != nil {

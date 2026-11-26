@@ -7,15 +7,30 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
 	"github.com/denhac/prusa-connect-local-bot/internal/domain"
 )
 
-// New is the module's routes. health is read on every request.
-func New(health func() domain.Health) http.Handler {
+// LinkPage answers GET /link: the status and the page's text, for a
+// signed-in principal and the nonce in ?for=.
+type LinkPage func(ctx context.Context, nonce, principal string) (int, string)
+
+// New is the module's routes. health is read on every request. principalOf
+// is who the host authorized for a request (routesapi.PrincipalOf).
+func New(health func() domain.Health, link LinkPage, principalOf func(*http.Request) string) http.Handler {
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /link", func(w http.ResponseWriter, r *http.Request) {
+		status, page := link(r.Context(), r.URL.Query().Get("for"), principalOf(r))
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(page))
+	})
 
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

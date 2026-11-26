@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "prusa-connect-local-bot",
-    "version": "0.2.1",
+    "version": "0.3.2",
     "description": "The routes of the Slack module. Every path is relative to the mount the host assigns, /api/v1/modules/<namespace>, and the host serves this document rebased under it at <mount>/openapi.json."
   },
   "paths": {
@@ -96,6 +96,66 @@
                     "slack",
                     "notify"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/link": {
+      "get": {
+        "operationId": "get-link-code",
+        "summary": "A one-time code that links a Slack user to your account",
+        "description": "Opened in a browser from the address the bot sends in a Slack direct message, with ?for=<nonce>. For a signed-in person it answers a one-time code, valid 10 minutes, and says which Slack user it links to which account; the person types the code in Slack. The nonce is single-use. The host takes view_resource on the module's instance before this is called.",
+        "parameters": [
+          {
+            "name": "for",
+            "in": "query",
+            "required": true,
+            "description": "The nonce from the bot's direct message.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The code, as text.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not a person's account.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The address expired or was used already.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Account features are off.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }

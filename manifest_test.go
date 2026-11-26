@@ -16,6 +16,7 @@ import (
 	"github.com/denhac/prusa-connect-local-bot/internal/app"
 	"github.com/denhac/prusa-connect-local-bot/internal/secret"
 	"github.com/denhac/prusa-connect-local-bot/internal/settings"
+	"github.com/denhac/prusa-connect-local-bot/internal/verify"
 )
 
 // readManifest parses module.yaml the way the server does: the SDK's parser
@@ -89,7 +90,7 @@ func TestOptionsMatchSettings(t *testing.T) {
 			read[key] = "bool"
 		case reflect.TypeFor[string]():
 			read[key] = "string"
-		case reflect.TypeFor[map[string]string]():
+		case reflect.TypeFor[map[string]string](), reflect.TypeFor[*verify.Config]():
 			read[key] = "object"
 		case reflect.TypeFor[[]string]():
 			read[key] = "list"

@@ -16,7 +16,7 @@ title: Slack bot
 summary: Posts printer status to Slack, and lets denhac members manage their account with /prusaconnect.
 codeowner: denhac
 kind: sink
-version: 0.2.1
+version: 0.3.2
 license: MIT
 contract_major: 1
 openapi: openapi.json
@@ -28,11 +28,19 @@ require:
   core-device.jobs: "*"
   core-device.job_history: "*"
   core-bus.subscribe: "*"
+  core-access.check: "*"
 
 # What the module does as itself: it reads the printers and follows their
 # events, for the status messages and the status, jobs and bot commands.
 permissions:
   - observe
+
+# Before an admin command, the module asks the server whether the person's
+# linked account administers the server's accounts. Those people are not on a
+# request of the module's, so the question needs check_absent_people.
+checks:
+  - configure_resource
+check_absent_people: true
 
 needs:
   # Where the module keeps its state file, state.json.
@@ -51,8 +59,12 @@ egress:
   - option: server_url
     ports: [8080]
     from: process
-    why: Signs in as the bot's own account, to read camera pictures from the server.
-    sends: The bot account's name and password, then requests for camera pictures.
+    why: Signs in as the bot's own account, to read camera pictures and to create and change members' accounts.
+    sends: The bot account's name and password, then camera and account requests.
+  - host: denhac.org
+    from: process
+    why: Reads a member's public status page, to check that they may have an account.
+    sends: The member code.
 
 # Every setting is optional: a required one left empty would make the server
 # refuse the install. The module runs idle and lists what is missing instead.
@@ -92,7 +104,15 @@ options:
   - key: admin_password
     type: secret
     default: ""
-    summary: That account's password. Empty turns off what needs a sign-in, such as camera stills from the server.
+    summary: That account's password. Empty turns off what needs a sign-in, such as camera stills and account features.
+  - key: public_url
+    type: url
+    default: ""
+    summary: Where people open the printer server in a browser, for the link page. Never a Tailscale address.
+  - key: verify
+    type: object
+    default: '{"member_field":"Member","code_field":"Member Code URL","member_url":"https://denhac.org/member/","authorization":"3D Printer User"}'
+    summary: Where the membership facts are - the two Slack profile fields, the member page address, and the authorization an account needs.
 
 platforms:
   - linux_arm64

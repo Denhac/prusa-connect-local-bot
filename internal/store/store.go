@@ -1,8 +1,11 @@
 // Package store keeps the module's state in one JSON file in the data
 // directory the server grants it (docs/design.md, "State").
 //
-// Every save writes a temporary file, syncs it, renames it over the old one and
-// syncs the directory, so a crash leaves either the old state or the new one.
+// Two owners write it: the status-message loop and the account service. Each
+// saves its own part, which is encoded while its owner holds its own lock, so
+// neither can race the other. Every save writes a temporary file, syncs it,
+// renames it over the old one and syncs the directory, so a crash leaves
+// either the old state or the new one.
 package store
 
 import (
@@ -18,10 +21,9 @@ import (
 	"github.com/denhac/prusa-connect-local-bot/internal/domain"
 )
 
-// Schema is the version of the file this code writes. A file of another
-// version stops the start with a clear error: there are no migrations until
-// one is needed.
-const Schema = 1
+// Schema is the version of the file this code writes. Version 1 (0.2.x) is
+// read and turned into version 2; any other stops the start with an error.
+const Schema = 2
 
 // FileName is the state file's name in the data directory.
 const FileName = "state.json"
@@ -35,67 +37,130 @@ type Thread struct {
 	TS      string `json:"ts"`
 }
 
-// State is everything the file holds.
-type State struct {
-	Schema int `json:"schema"`
+// Status is the status-message loop's part.
+type Status struct {
 	// Version is the module version that last wrote the file.
 	Version string `json:"version,omitempty"`
 	// LastAlive is written every minute while the module runs.
 	LastAlive time.Time `json:"last_alive,omitzero"`
 	// LastApplied is when the last event applied was published.
 	LastApplied time.Time `json:"last_applied,omitzero"`
-	// Threads is each status message the module posted, by its thread key.
+	// Threads is each status message posted, by its thread key.
 	Threads map[string]Thread  `json:"threads,omitempty"`
 	Notify  domain.NotifyState `json:"notify"`
+}
+
+// State is the whole file.
+type State struct {
+	Status   Status              `json:"status"`
+	Accounts domain.MembersState `json:"accounts"`
+}
+
+// file is the file's own shape.
+type file struct {
+	Schema   int             `json:"schema"`
+	Status   json.RawMessage `json:"status,omitempty"`
+	Accounts json.RawMessage `json:"accounts,omitempty"`
 }
 
 // Store is the state file. It is safe for concurrent use.
 type Store struct {
 	path string
-	mu   sync.Mutex
+
+	mu       sync.Mutex
+	status   json.RawMessage
+	accounts json.RawMessage
 }
 
 // Open reads the state file in dir, or answers an empty state when there is
 // none yet.
 func Open(dir string) (*Store, State, error) {
 	s := &Store{path: filepath.Join(dir, FileName)}
+	st := State{Status: Status{Threads: map[string]Thread{}}}
 
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return s, State{Schema: Schema, Threads: map[string]Thread{}}, nil
+		return s, st, nil
 	}
 
 	if err != nil {
 		return nil, State{}, fmt.Errorf("store: read %s: %w", s.path, err)
 	}
 
-	var st State
-	if err := json.Unmarshal(data, &st); err != nil {
+	var f file
+	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, State{}, fmt.Errorf("store: %s is not valid JSON: %w", s.path, err)
 	}
 
-	if st.Schema != Schema {
-		return nil, State{}, fmt.Errorf("%w: %s is schema %d, and this version reads %d", ErrSchema, s.path, st.Schema, Schema)
+	switch f.Schema {
+	case 1:
+		// 0.2.x kept the status fields at the top level, beside the schema.
+		f.Status = data
+	case Schema:
+	default:
+		return nil, State{}, fmt.Errorf("%w: %s is schema %d, and this version reads 1 and %d", ErrSchema, s.path, f.Schema, Schema)
 	}
 
-	if st.Threads == nil {
-		st.Threads = map[string]Thread{}
+	if len(f.Status) > 0 {
+		if err := json.Unmarshal(f.Status, &st.Status); err != nil {
+			return nil, State{}, fmt.Errorf("store: the status in %s: %w", s.path, err)
+		}
 	}
+
+	if len(f.Accounts) > 0 {
+		if err := json.Unmarshal(f.Accounts, &st.Accounts); err != nil {
+			return nil, State{}, fmt.Errorf("store: the accounts in %s: %w", s.path, err)
+		}
+	}
+
+	if st.Status.Threads == nil {
+		st.Status.Threads = map[string]Thread{}
+	}
+
+	// Keep both parts as they were read, so the first save of one keeps the
+	// other.
+	s.status, _ = json.Marshal(st.Status)
+	s.accounts, _ = json.Marshal(st.Accounts)
 
 	return s, st, nil
 }
 
-// Save writes the state.
-func (s *Store) Save(st State) error {
-	st.Schema = Schema
-
-	data, err := json.MarshalIndent(st, "", " ")
+// SaveStatus writes the status part. The caller holds whatever guards st.
+func (s *Store) SaveStatus(st Status) error {
+	data, err := json.Marshal(st)
 	if err != nil {
-		return fmt.Errorf("store: encode: %w", err)
+		return fmt.Errorf("store: encode the status: %w", err)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	s.status = data
+
+	return s.write()
+}
+
+// SaveAccounts writes the account part. The caller holds whatever guards st.
+func (s *Store) SaveAccounts(st domain.MembersState) error {
+	data, err := json.Marshal(st)
+	if err != nil {
+		return fmt.Errorf("store: encode the accounts: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.accounts = data
+
+	return s.write()
+}
+
+// write puts both parts on disk. s.mu is held.
+func (s *Store) write() error {
+	data, err := json.MarshalIndent(file{Schema: Schema, Status: s.status, Accounts: s.accounts}, "", " ")
+	if err != nil {
+		return fmt.Errorf("store: encode: %w", err)
+	}
 
 	dir := filepath.Dir(s.path)
 

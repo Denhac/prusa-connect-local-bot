@@ -66,6 +66,13 @@ them. Read the `[sdk]` lines of each release's `docs/CHANGELOG.md`.
 | `POST /api/v1/auth/logout` | when the module stops |
 | `GET /api/v1/cameras` | `items[]` with `name`, `device_id` (the printer, empty for none) and `snapshot` (whether it serves stills). Read again every 5 minutes |
 | `GET /api/v1/cameras/{camera}/snapshot` | `200 image/jpeg` with `Last-Modified`. `204` is no frame yet, `404` an unknown camera, `502` a camera the server could not read. Over 10 minutes old is treated as live view on |
+| `GET /api/v1/auth/accounts` | `items[]` with `id`, `username`, `display_name`, `role` (`viewer`, `operator`, `admin`, or empty) and `created_at`. Read again before every change, which refuses an account holding admin or the bot's own |
+| `POST /api/v1/auth/accounts` | `{username, password, display_name, role: "operator"}`. 201 is the account; 409 is a taken name. Needs a sign-in |
+| `POST /api/v1/auth/accounts/{id}/password` | `{new_password}`. 204. A 5xx is tried again: the server may have set the password and failed to end the old sessions. It ends every session, token and pairing of the account |
+| `PUT /api/v1/auth/accounts/{id}/role` | `{role}`, only `operator` or `viewer`. 204 |
+| `DELETE /api/v1/auth/accounts/{id}` | 204; 404 is taken as already gone (phase 3) |
+| `access.check` (wire) | `configure_resource` on `resource_kind`/`auth` for `user:<id>`, with `checks: [configure_resource]` and `check_absent_people: true`: whether a linked admin still administers the server |
+| `routes.serve` `GET /link` | the principal the host passes (`routesapi.PrincipalOf`); only `user:` principals get a code |
 
 ## Slack (`internal/slack`)
 
@@ -78,6 +85,11 @@ Library: `github.com/slack-go/slack v0.36.0` (`socketmode` included).
 | Socket Mode envelopes | `slash_commands`, acknowledged at once with `Client.Ack` (Slack allows 3 s). `interactive` and `events_api` are acknowledged and ignored for now |
 | Slash command payload | `team_id` (another workspace is refused), `user_id`, `text`, `response_url` |
 | `users.info` (`users:read`) | `deleted`, `is_restricted`, `is_ultra_restricted`: refusing deactivated users and guests. Cached 10 minutes |
+| `team.profile.get`, `users.profile.get` (`users.profile:read`) | the workspace's field labels (cached an hour), and a user's custom field values by those labels |
+| Interactivity | `block_actions` (the confirm buttons, acknowledged at once) and `view_submission` (acknowledged with `response_action: update` to a "Working" window, then `views.update`) |
+| `views.open`, `views.update` | windows: `views.open` within 3 s of the command's `trigger_id`. Titles at most 24 characters |
+| `conversations.open` (`im:write`) | the DM carrying the link address |
+| Slash command escaping | `should_escape: true`: a mention arrives as `<@U…|name>` |
 | `response_url` | the answer to a command, as `{"response_type":"ephemeral", "text", "blocks"}` |
 | Block Kit | `header`, `section` (plain_text text, mrkdwn fields, at most 10 a section) and `context` |
 | `chat.postMessage` (`chat:write`) | status messages, and replies with `thread_ts`. About one a second per channel; a `429` is waited out once, as its `Retry-After` says |
@@ -94,6 +106,12 @@ The contract is the sister project's `docs/api.md`, v1.
 | Addresses | from the `cameras` setting. Private, loopback and link-local addresses only, checked when the connection is made, never Tailscale's `100.64.0.0/10` or `fd7a:115c:a1e0::/48`. No redirects, at most 8 MiB, 15 s |
 | Egress | the Pi hosts cannot be named in `module.yaml`: its `egress` grammar takes a host or a `string`/`url` option, and `cameras` is an object. Egress is not enforced at run time |
 
-## denhac.org
+## denhac.org (`internal/verify`)
 
-Not used yet (phase 2).
+| what | details |
+|---|---|
+| Slack profile | the custom field labelled `Member` is `Yes`, and `Member Code URL` links to `https://denhac.org/member/<code>`. The code (2 to 16 letters or digits) is taken from the link, and the bot builds the address itself |
+| `GET https://denhac.org/member/<code>` | public. 200 is the page, 404 an unknown code. At most one request every 2 s, 15 s, 1 MiB, cached 10 min (as denhac's own `max-age=600`), and redirects only within denhac.org |
+| The page | `div.page-content`, then `<h2>User Information</h2>` with a list whose items read `Display Name: …` and `Membership Status: …`, and `<h2>Active Authorizations</h2>` with one item each. A page with no status is a changed layout: "cannot tell". Test pages are in `internal/verify/testdata/denhac/` |
+| Qualifying | status `ACTIVE` and the authorization in `verify.authorization`, compared without case |
+| Member codes | unique to one person. A second Slack user with the same code is refused and logged |

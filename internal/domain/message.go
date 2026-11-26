@@ -20,6 +20,20 @@ type Message struct {
 	Fields []Field
 	// Footer is small text at the end, if any.
 	Footer string
+	// Link is an address drawn as a link after the lines, if any.
+	Link string
+	// Buttons are clicks the person can make on the message.
+	Buttons []Button
+}
+
+// Button is one click on a message. Action says what it does, and Value is
+// handed back with the click.
+type Button struct {
+	Action string
+	Value  string
+	Label  string
+	// Danger draws it as a destructive action.
+	Danger bool
 }
 
 // Field is one label and its value.

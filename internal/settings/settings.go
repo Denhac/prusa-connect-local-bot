@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/denhac/prusa-connect-local-bot/internal/secret"
+	"github.com/denhac/prusa-connect-local-bot/internal/verify"
 )
 
 // The defaults module.yaml also declares, used when a value arrives empty.
@@ -40,6 +41,8 @@ type Sent struct {
 	ServerURL     string            `json:"server_url"`
 	AdminUsername string            `json:"admin_username"`
 	AdminPassword secret.Secret     `json:"admin_password"`
+	PublicURL     string            `json:"public_url"`
+	Verify        *verify.Config    `json:"verify"`
 }
 
 // Values are the settings once checked.
@@ -65,6 +68,10 @@ type Values struct {
 	// password, everything that needs a sign-in stays off.
 	AdminUsername string
 	AdminPassword secret.Secret
+	// PublicURL is where people open the printer server, for the link page.
+	PublicURL string
+	// Verify is where the membership facts are.
+	Verify verify.Config
 }
 
 // channelID is the shape of a Slack channel ID: C for a channel, G for an old
@@ -110,7 +117,34 @@ func Read(sent Sent) (Values, error) {
 		sent.AdminUsername = DefaultAdminUsername
 	}
 
-	return Values(sent), nil
+	verifyConfig := verify.Defaults()
+	if sent.Verify != nil {
+		verifyConfig = mergeVerify(verifyConfig, *sent.Verify)
+	}
+
+	return Values{
+		SlackBotToken: sent.SlackBotToken, SlackAppToken: sent.SlackAppToken, StatusChannel: sent.StatusChannel,
+		AllowGuests: sent.AllowGuests, Cameras: sent.Cameras, IssueReasons: sent.IssueReasons,
+		ServerURL: sent.ServerURL, AdminUsername: sent.AdminUsername, AdminPassword: sent.AdminPassword,
+		PublicURL: strings.TrimRight(sent.PublicURL, "/"), Verify: verifyConfig,
+	}, nil
+}
+
+// mergeVerify keeps a default for each key left empty.
+func mergeVerify(base, over verify.Config) verify.Config {
+	for _, pair := range []struct {
+		to   *string
+		from string
+	}{
+		{&base.MemberField, over.MemberField}, {&base.CodeField, over.CodeField},
+		{&base.MemberURL, over.MemberURL}, {&base.Authorization, over.Authorization},
+	} {
+		if pair.from != "" {
+			*pair.to = pair.from
+		}
+	}
+
+	return base
 }
 
 // prefixed refuses a token that does not start as its kind does. The message

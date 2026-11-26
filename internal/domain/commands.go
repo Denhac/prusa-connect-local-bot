@@ -16,6 +16,8 @@ const (
 	// members can see that channel, so until the member check of phase 2
 	// this is how printer status stays with members.
 	InBots
+	// Admins are people linked to an admin account the server confirms.
+	Admins
 )
 
 // String names the audience in help text.
@@ -25,6 +27,8 @@ func (w Who) String() string {
 		return "anyone"
 	case InBots:
 		return "in #bots"
+	case Admins:
+		return "admins"
 	}
 
 	return "nobody"
@@ -54,7 +58,14 @@ func Commands() []Command {
 		{Name: "status", Usage: "[printer] [--here]", Summary: "What the printers are doing. --here posts it in the channel.", Who: InBots},
 		{Name: "jobs", Usage: "[printer]", Summary: "The last prints.", Who: InBots},
 		{Name: "snap", Usage: "[printer]", Summary: "A picture from a printer's camera, posted in the channel.", Who: InBots},
+		{Name: "signup", Summary: "Make your account on the printer server (denhac members with 3D Printer User).", Who: Anyone},
+		{Name: "password", Summary: "Set a new password on your account.", Who: Anyone},
+		{Name: "whoami", Summary: "What the bot knows about you.", Who: Anyone},
+		{Name: "link", Usage: "[code]", Summary: "Link your Slack user to an account you already have on the printer server.", Who: Anyone},
 		{Name: "bot", Summary: "How the bot itself is doing.", Who: Anyone},
+		{Name: "suspend", Usage: "[@user|username|member code] [reason]", Summary: "Turn an account off until an admin lifts it. Alone, lists the suspensions.", Who: Admins},
+		{Name: "unsuspend", Usage: "<@user|username|member code>", Summary: "Lift a suspension.", Who: Admins},
+		{Name: "lookup", Usage: "<@user|username|member code>", Summary: "Which member code, Slack user and account belong together.", Who: Admins},
 	}
 }
 
@@ -91,8 +102,8 @@ func Help() Message {
 		}
 
 		line := usage + ": " + c.Summary
-		if c.Who == InBots {
-			line += " (in #bots)"
+		if c.Who != Anyone {
+			line += " (" + c.Who.String() + ")"
 		}
 
 		lines = append(lines, line)

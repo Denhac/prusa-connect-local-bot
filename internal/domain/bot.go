@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -20,8 +21,9 @@ type Request struct {
 	Text string
 }
 
-// handler answers one command.
-type handler func(ctx context.Context, r Request, args []string) Message
+// handler answers one command. A handler that answers through the UI itself
+// returns an empty message.
+type handler func(ctx context.Context, r Request, args []string, ui UI) Message
 
 // BotConfig is what the command handler is built from.
 type BotConfig struct {
@@ -34,6 +36,10 @@ type BotConfig struct {
 	Now    func() time.Time
 	// StatusChannel is #bots, where the member commands answer.
 	StatusChannel string
+	// Accounts is the account half, nil while account features are off.
+	Accounts *AccountsService
+	// Log takes what went wrong behind a short answer. Nil logs nothing.
+	Log *slog.Logger
 }
 
 // Bot answers commands. It holds the ports it reads, and nothing of Slack.
@@ -42,7 +48,13 @@ type Bot struct {
 }
 
 // NewBot builds the command handler.
-func NewBot(cfg BotConfig) *Bot { return &Bot{cfg: cfg} }
+func NewBot(cfg BotConfig) *Bot {
+	if cfg.Log == nil {
+		cfg.Log = slog.New(slog.DiscardHandler)
+	}
+
+	return &Bot{cfg: cfg}
+}
 
 // The time limits of the commands that read the fleet or a camera.
 const (
@@ -53,19 +65,85 @@ const (
 
 // handlers is the code behind each command in Commands.
 func (b *Bot) handlers() map[string]handler {
+	plain := func(f func(context.Context, Request, []string) Message) handler {
+		return func(ctx context.Context, r Request, args []string, _ UI) Message { return f(ctx, r, args) }
+	}
+
 	return map[string]handler{
-		"help": func(context.Context, Request, []string) Message { return Help() },
-		"bot": func(ctx context.Context, _ Request, _ []string) Message {
+		"help": plain(func(context.Context, Request, []string) Message { return Help() }),
+		"bot": plain(func(ctx context.Context, _ Request, _ []string) Message {
 			return BotStatus(ctx, b.cfg.Health(), b.cfg.Fleet, b.cfg.Now())
-		},
-		"status": b.status,
-		"jobs":   b.jobs,
-		"snap":   b.snap,
+		}),
+		"status": plain(b.status),
+		"jobs":   plain(b.jobs),
+		"snap":   plain(b.snap),
+		"signup": b.accounts(func(ctx context.Context, a *AccountsService, r Request, _ []string, ui UI) Message {
+			a.Signup(ctx, r, ui)
+
+			return Message{}
+		}),
+		"password": b.accounts(func(ctx context.Context, a *AccountsService, r Request, _ []string, ui UI) Message {
+			a.Password(ctx, r, ui)
+
+			return Message{}
+		}),
+		"whoami": b.accounts(func(ctx context.Context, a *AccountsService, r Request, _ []string, _ UI) Message {
+			return a.WhoAmI(ctx, r)
+		}),
+		"link": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, ui UI) Message {
+			return a.Link(ctx, r, args, ui)
+		}),
+		"suspend": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, _ UI) Message {
+			return a.Suspend(ctx, r, args)
+		}),
+		"unsuspend": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, _ UI) Message {
+			return a.Unsuspend(ctx, r, args)
+		}),
+		"lookup": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, _ UI) Message {
+			return a.Lookup(ctx, r, args)
+		}),
 	}
 }
 
-// Handle answers one command.
-func (b *Bot) Handle(ctx context.Context, r Request) Message {
+// accounts wraps a command of the account half, which is off without the
+// bot's sign-in.
+func (b *Bot) accounts(f func(context.Context, *AccountsService, Request, []string, UI) Message) handler {
+	return func(ctx context.Context, r Request, args []string, ui UI) Message {
+		if b.cfg.Accounts == nil {
+			return say("Account features are off: the bot has no sign-in to the printer server yet.")
+		}
+
+		return f(ctx, b.cfg.Accounts, r, args, ui)
+	}
+}
+
+// Interact answers a click or a window's submit.
+func (b *Bot) Interact(ctx context.Context, it Interaction, ui UI) {
+	a := b.cfg.Accounts
+	if a == nil {
+		return
+	}
+
+	switch {
+	case it.Action == "link-confirm":
+		a.LinkConfirm(ctx, it, ui)
+	case it.Action == "suspend-confirm":
+		a.SuspendConfirm(ctx, it, ui)
+	case it.Action == "unsuspend-confirm":
+		a.UnsuspendConfirm(ctx, it, ui)
+	case it.Callback == "signup-name" || it.Callback == "signup-replace":
+		a.SignupSubmit(ctx, it, ui)
+	}
+}
+
+// Handle answers one command through its UI.
+func (b *Bot) Handle(ctx context.Context, r Request, ui UI) {
+	if m := b.answer(ctx, r, ui); len(m.Lines) > 0 || len(m.Fields) > 0 || m.Title != "" {
+		_ = ui.Respond(ctx, m) // a failed answer has nowhere else to go
+	}
+}
+
+func (b *Bot) answer(ctx context.Context, r Request, ui UI) Message {
 	name, args := Parse(r.Text)
 
 	c, known := Lookup(name)
@@ -87,7 +165,7 @@ func (b *Bot) Handle(ctx context.Context, r Request) Message {
 		return Unknown(name)
 	}
 
-	return run(ctx, r, args)
+	return run(ctx, r, args, ui)
 }
 
 // printers reads the fleet for a command, sorted by name.
@@ -318,11 +396,20 @@ func (b *Bot) snap(ctx context.Context, r Request, args []string) Message {
 	case errors.Is(err, ErrNoPicture):
 		return say(p.Label() + "'s camera has not sent a picture yet.")
 	case err != nil:
+		b.cfg.Log.Warn("could not get a still", "printer", p.ID, "error", err)
+
 		return say("The bot could not get a picture from " + p.Label() + "'s camera.")
 	}
 
 	title := p.Label() + " at " + clock(b.cfg.Now(), b.cfg.Now())
 	if err := b.cfg.Chat.Upload(ctx, r.Channel, "", jpeg, title); err != nil {
+		b.cfg.Log.Warn("could not post a still", "printer", p.ID, "bytes", len(jpeg), "error", err)
+
+		if errors.Is(err, ErrNotInChannel) {
+			return say("The bot is not in this channel, so it cannot post the picture. " +
+				"Invite it with /invite and the bot's name, then try again.")
+		}
+
 		return say("The bot could not post the picture.")
 	}
 

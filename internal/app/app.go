@@ -15,10 +15,12 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/prusa3d/prusa-connect/sdk/accessapi"
 	"github.com/prusa3d/prusa-connect/sdk/deviceapi"
 	"github.com/prusa3d/prusa-connect/sdk/extension"
 	"github.com/prusa3d/prusa-connect/sdk/routesapi"
@@ -33,14 +35,19 @@ import (
 	"github.com/denhac/prusa-connect-local-bot/internal/settings"
 	slackbot "github.com/denhac/prusa-connect-local-bot/internal/slack"
 	"github.com/denhac/prusa-connect-local-bot/internal/store"
+	"github.com/denhac/prusa-connect-local-bot/internal/verify"
 )
 
 // What the module reports to the host. Name is the manifest's name, and the
 // version is the manifest's version: manifest_test.go holds them together.
 const (
 	Name    = "slack-bot"
-	Version = extension.Version("0.2.1")
+	Version = extension.Version("0.3.2")
 )
+
+// Namespace is where the server mounts the module's routes: the module path
+// github.com/denhac/prusa-connect-local-bot, as the server spells it.
+const Namespace = "com.github.aux.denhac.prusa-connect-local-bot"
 
 // sdkModule is the SDK's Go module path, read back from the build information.
 const sdkModule = "github.com/prusa3d/prusa-connect/sdk"
@@ -96,7 +103,8 @@ func Run(openAPI []byte) error {
 		return fmt.Errorf("build the session: %w", err)
 	}
 
-	m := newModule(log, openAPI, connect.NewFleet(deviceapi.NewClient(conn)), connect.NewEvents(conn, log), time.Now)
+	m := newModule(log, openAPI, connect.NewFleet(deviceapi.NewClient(conn)), connect.NewEvents(conn, log),
+		connect.NewAccess(accessapi.NewClient(conn)), time.Now)
 	maps.Copy(serves, m.methods())
 
 	log.Info("serving on stdio", "version", Version, "sdk", sdkVersion(), "pid", os.Getpid())
@@ -122,19 +130,24 @@ type module struct {
 	now     func() time.Time
 	started time.Time
 
-	mu         sync.Mutex
-	configured bool
-	values     settings.Values
-	slack      *slackbot.Runner
-	notify     *notifyLoop
-	notifyOff  string
-	session    *serverhttp.Session
-	cancel     context.CancelFunc
-	done       chan struct{}
+	mu          sync.Mutex
+	configured  bool
+	values      settings.Values
+	slack       *slackbot.Runner
+	notify      *notifyLoop
+	notifyOff   string
+	accounts    *domain.AccountsService
+	accountsOff string
+	access      domain.Access
+	session     *serverhttp.Session
+	cancel      context.CancelFunc
+	done        chan struct{}
 }
 
-func newModule(log *slog.Logger, openAPI []byte, fleet domain.Fleet, events domain.Events, now func() time.Time) *module {
-	return &module{log: log, openAPI: openAPI, fleet: fleet, events: events, now: now, started: now()}
+func newModule(
+	log *slog.Logger, openAPI []byte, fleet domain.Fleet, events domain.Events, access domain.Access, now func() time.Time,
+) *module {
+	return &module{log: log, openAPI: openAPI, fleet: fleet, events: events, access: access, now: now, started: now()}
 }
 
 // methods is what the module answers on the wire.
@@ -155,7 +168,7 @@ func (m *module) methods() wirerpc.Methods {
 			return nil, nil
 		},
 		wirerpc.MethodConfigure: wirerpc.ConfigureGranted(m.configure),
-		routesapi.MethodServe:   routesapi.Serve(routes.New(m.health)),
+		routesapi.MethodServe:   routesapi.Serve(routes.New(m.health, m.linkPage, routesapi.PrincipalOf)),
 	}
 }
 
@@ -216,8 +229,22 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 		stills = sources
 	}
 
+	var (
+		state     *store.Store
+		saved     store.State
+		stateFail string
+	)
+
+	if grants.Data == "" {
+		stateFail = "the server granted no data directory; approve the module's data request"
+	} else if state, saved, err = store.Open(grants.Data); err != nil {
+		m.log.Error("cannot read the state file; status messages and accounts stay off", "error", err)
+		stateFail = "the state file cannot be read: " + err.Error()
+		state = nil
+	}
+
 	if !values.SlackReady() {
-		m.notifyOff = "the Slack tokens are not set"
+		m.notifyOff, m.accountsOff = "the Slack tokens are not set", "the Slack tokens are not set"
 
 		return nil
 	}
@@ -228,14 +255,22 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 		AllowGuests: values.AllowGuests,
 	}
 	poster := slackbot.NewPoster(slackConfig, m.log, m.now)
+	profiles := slackbot.NewProfiles(slackConfig, m.log, m.now)
+
+	accounts, err := m.newAccounts(values, session, profiles, state, saved, stateFail)
+	if err != nil {
+		return err
+	}
 
 	bot := domain.NewBot(domain.BotConfig{
 		Fleet: m.fleet, Stills: stills, Chat: poster, Health: m.health, Now: m.now,
-		StatusChannel: values.StatusChannel,
+		StatusChannel: values.StatusChannel, Accounts: accounts,
+		Log: m.log.With("component", "bot"),
 	})
 	runner := slackbot.New(slackConfig, bot, m.log, m.now)
 
-	m.notify, m.notifyOff = m.newNotify(values, grants, poster, stills)
+	m.notify, m.notifyOff = m.newNotify(values, state, saved, stateFail, poster, stills)
+	m.accounts = accounts
 
 	// The connections outlive this call and end when the module stops.
 	background, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -250,6 +285,10 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 		wg.Go(func() { m.notify.run(background) })
 	}
 
+	if accounts != nil {
+		wg.Go(func() { accounts.Recover(background) })
+	}
+
 	go func() {
 		wg.Wait()
 		close(done)
@@ -258,22 +297,50 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 	return nil
 }
 
+// newAccounts builds the account service, or says why it stays off. Only a
+// setting of the wrong shape is an error.
+func (m *module) newAccounts(
+	values settings.Values, session *serverhttp.Session, profiles *slackbot.Profiles,
+	state *store.Store, saved store.State, stateFail string,
+) (*domain.AccountsService, error) {
+	switch {
+	case values.AdminPassword.Empty():
+		m.accountsOff = "admin_password is not set"
+
+		return nil, nil
+	case state == nil:
+		m.accountsOff = stateFail
+
+		return nil, nil
+	}
+
+	verifier, err := verify.New(values.Verify, profiles, m.now)
+	if err != nil {
+		return nil, fmt.Errorf("verify: %w", err)
+	}
+
+	link := ""
+	if values.PublicURL != "" {
+		link = strings.TrimRight(values.PublicURL, "/") + "/api/v1/modules/" + Namespace + "/link"
+	}
+
+	return domain.NewAccountsService(domain.AccountsConfig{
+		Verifier: verifier, Accounts: serverhttp.NewAccounts(session, values.AdminUsername),
+		Access: m.access, Directory: profiles, BotAccount: values.AdminUsername, LinkURL: link,
+		Now: m.now, Save: state.SaveAccounts, Log: m.log,
+	}, saved.Accounts), nil
+}
+
 // newNotify builds the status-message loop, or says why it stays off.
 func (m *module) newNotify(
-	values settings.Values, grants wirerpc.Grants, chat domain.Chat, stills domain.Stills,
+	values settings.Values, state *store.Store, saved store.State, stateFail string,
+	chat domain.Chat, stills domain.Stills,
 ) (*notifyLoop, string) {
 	switch {
 	case values.StatusChannel == "":
 		return nil, "status_channel is not set"
-	case grants.Data == "":
-		return nil, "the server granted no data directory; approve the module's data request"
-	}
-
-	s, state, err := store.Open(grants.Data)
-	if err != nil {
-		m.log.Error("cannot read the state file; status messages stay off", "error", err)
-
-		return nil, "the state file cannot be read: " + err.Error()
+	case state == nil:
+		return nil, stateFail
 	}
 
 	cfg := domain.DefaultNotifyConfig()
@@ -281,8 +348,21 @@ func (m *module) newNotify(
 		cfg.IssueReasons = values.IssueReasons
 	}
 
-	return newNotifyLoop(m.log, s, state, cfg, m.fleet, m.events, chat, stills,
+	return newNotifyLoop(m.log, state, saved.Status, cfg, m.fleet, m.events, chat, stills,
 		values.StatusChannel, string(Version), m.now), ""
+}
+
+// linkPage answers the module's /link route.
+func (m *module) linkPage(ctx context.Context, nonce, principal string) (int, string) {
+	m.mu.Lock()
+	accounts := m.accounts
+	m.mu.Unlock()
+
+	if accounts == nil {
+		return 503, "Account features are off on this server."
+	}
+
+	return accounts.LinkPage(ctx, nonce, principal)
 }
 
 // health is how the module is doing, for GET /status and the bot command.
@@ -305,6 +385,11 @@ func (m *module) health() domain.Health {
 		h.Notify = m.notify.Status()
 	} else {
 		h.Notify.Detail = m.notifyOff
+	}
+
+	h.Accounts = "on"
+	if m.accounts == nil {
+		h.Accounts = "off: " + m.accountsOff
 	}
 
 	if m.configured {

@@ -23,7 +23,8 @@ features:
     - command: /prusaconnect
       description: Printer status, and your account on the printer server
       usage_hint: "help | status | signup | password | whoami"
-      should_escape: false
+      # Mentions arrive as <@U…|name>, so admin commands can name a Slack user.
+      should_escape: true
 
 oauth_config:
   scopes:

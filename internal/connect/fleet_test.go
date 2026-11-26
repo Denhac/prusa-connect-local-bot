@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prusa3d/prusa-connect/sdk/accessapi"
 	"github.com/prusa3d/prusa-connect/sdk/deviceapi"
 )
 
@@ -130,5 +131,29 @@ func TestJobsAndHistory(t *testing.T) {
 
 	if devices.asked.ID != "a" || !devices.asked.From.Equal(since) || devices.asked.Limit != 10 {
 		t.Errorf("history asked %+v", devices.asked)
+	}
+}
+
+type checker struct{ asked accessapi.CheckParams }
+
+func (c *checker) Check(_ context.Context, p accessapi.CheckParams) (accessapi.Decision, error) {
+	c.asked = p
+
+	return accessapi.Decision{Allowed: p.Subject == "user:admin"}, nil
+}
+
+func TestIsServerAdmin(t *testing.T) {
+	c := &checker{}
+
+	if ok, err := NewAccess(c).IsServerAdmin(context.Background(), "user:admin"); !ok || err != nil {
+		t.Errorf("an admin: %v %v", ok, err)
+	}
+
+	if c.asked.Action != "configure_resource" || c.asked.ObjectType != "resource_kind" || c.asked.ObjectID != "auth" {
+		t.Errorf("asked %+v", c.asked)
+	}
+
+	if ok, _ := NewAccess(c).IsServerAdmin(context.Background(), "user:member"); ok {
+		t.Error("a member is an admin")
 	}
 }

@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -75,6 +76,54 @@ func (s fakeStills) Still(_ context.Context, device string, _ bool) ([]byte, err
 }
 
 const bots = "C0BOTS"
+
+// fakeUI keeps what a command said, opened and sent.
+type fakeUI struct {
+	said      []Message
+	modals    []Modal
+	dms       []Message
+	updateErr error
+}
+
+func (u *fakeUI) Respond(_ context.Context, m Message) error { u.said = append(u.said, m); return nil }
+
+func (u *fakeUI) OpenModal(_ context.Context, m Modal) (string, error) {
+	u.modals = append(u.modals, m)
+
+	return "V1", nil
+}
+
+func (u *fakeUI) UpdateModal(_ context.Context, _ string, m Modal) error {
+	if u.updateErr != nil {
+		return u.updateErr
+	}
+
+	u.modals = append(u.modals, m)
+
+	return nil
+}
+
+func (u *fakeUI) DM(_ context.Context, m Message) error { u.dms = append(u.dms, m); return nil }
+
+func (u *fakeUI) last() Modal {
+	if len(u.modals) == 0 {
+		return Modal{}
+	}
+
+	return u.modals[len(u.modals)-1]
+}
+
+// ask runs a command and answers what it said last.
+func ask(b *Bot, r Request) Message {
+	ui := &fakeUI{}
+	b.Handle(context.Background(), r, ui)
+
+	if len(ui.said) == 0 {
+		return Message{}
+	}
+
+	return ui.said[len(ui.said)-1]
+}
 
 func newBot(fleet Fleet, chat Chat, stills Stills) *Bot {
 	return NewBot(BotConfig{
@@ -151,7 +200,7 @@ func TestHelpListsEveryCommand(t *testing.T) {
 }
 
 func TestUnknownCommand(t *testing.T) {
-	got := newBot(fakeFleet{}, nil, nil).Handle(context.Background(), Request{Text: "frobnicate"})
+	got := ask(newBot(fakeFleet{}, nil, nil), Request{Text: "frobnicate"})
 	if !strings.Contains(text(got), `"frobnicate"`) {
 		t.Errorf("answer %+v", got)
 	}
@@ -159,7 +208,7 @@ func TestUnknownCommand(t *testing.T) {
 
 func TestBotStatus(t *testing.T) {
 	fleet := fakeFleet{printers: []Printer{{ID: "a", Connected: true}, {ID: "b"}}}
-	got := newBot(fleet, nil, nil).Handle(context.Background(), Request{Text: "bot"})
+	got := ask(newBot(fleet, nil, nil), Request{Text: "bot"})
 
 	want := map[string]string{
 		"Version":         "0.2.0 (SDK v0.1.0-beta.2)",
@@ -182,7 +231,7 @@ func TestBotStatus(t *testing.T) {
 }
 
 func TestBotStatusWithoutTheFleet(t *testing.T) {
-	got := newBot(fakeFleet{err: errors.New("not ready")}, nil, nil).Handle(context.Background(), Request{Text: "bot"})
+	got := ask(newBot(fakeFleet{err: errors.New("not ready")}, nil, nil), Request{Text: "bot"})
 	if !strings.Contains(text(got), "cannot read the printers right now") {
 		t.Errorf("answered %s", text(got))
 	}
@@ -194,13 +243,13 @@ func TestMemberCommandsOnlyInBots(t *testing.T) {
 	bot := newBot(fakeFleet{printers: []Printer{{ID: "a", Name: "MK4S-1", Connected: true}}}, &fakeChat{}, nil)
 
 	for _, cmd := range []string{"status", "jobs", "snap"} {
-		got := bot.Handle(context.Background(), Request{Channel: "C0PUBLIC", Text: cmd})
+		got := ask(bot, Request{Channel: "C0PUBLIC", Text: cmd})
 		if !strings.Contains(text(got), "in #bots") {
 			t.Errorf("%s outside #bots answered %s", cmd, text(got))
 		}
 	}
 
-	if got := bot.Handle(context.Background(), Request{Channel: "C0PUBLIC", Text: "help"}); strings.Contains(text(got), "Use ") {
+	if got := ask(bot, Request{Channel: "C0PUBLIC", Text: "help"}); strings.Contains(text(got), "Use ") {
 		t.Errorf("help was refused outside #bots: %s", text(got))
 	}
 }
@@ -216,7 +265,7 @@ func TestStatus(t *testing.T) {
 		current: map[string]*Job{"a": {ID: "j1", File: "bracket.bgcode", Progress: 45, TimeRemaining: 70 * time.Minute}},
 	}
 
-	got := newBot(fleet, nil, nil).Handle(context.Background(), Request{Channel: bots, Text: "status"})
+	got := ask(newBot(fleet, nil, nil), Request{Channel: bots, Text: "status"})
 	want := "Printers\n" +
 		"Mini: offline\n" +
 		"MK4S-1: printing · 45% of bracket.bgcode, 1 h 10 min to go · nozzle 215/215 °C · bed 60/60 °C\n" +
@@ -226,12 +275,12 @@ func TestStatus(t *testing.T) {
 		t.Errorf("status answered\n%s\nwant\n%s", text(got), want)
 	}
 
-	one := newBot(fleet, nil, nil).Handle(context.Background(), Request{Channel: bots, Text: "status mk4"})
+	one := ask(newBot(fleet, nil, nil), Request{Channel: bots, Text: "status mk4"})
 	if len(one.Fields) != 1 || one.Fields[0].Label != "MK4S-1" {
 		t.Errorf("status mk4 answered %s", text(one))
 	}
 
-	none := newBot(fleet, nil, nil).Handle(context.Background(), Request{Channel: bots, Text: "status nope"})
+	none := ask(newBot(fleet, nil, nil), Request{Channel: bots, Text: "status nope"})
 	if !strings.Contains(text(none), "The printers are: Mini, MK4S-1, XL") {
 		t.Errorf("status nope answered %s", text(none))
 	}
@@ -241,7 +290,7 @@ func TestStatusHere(t *testing.T) {
 	chat := &fakeChat{}
 	fleet := fakeFleet{printers: []Printer{{ID: "a", Name: "MK4S-1", Connected: true, State: "IDLE"}}}
 
-	got := newBot(fleet, chat, nil).Handle(context.Background(), Request{Channel: bots, Text: "status --here"})
+	got := ask(newBot(fleet, chat, nil), Request{Channel: bots, Text: "status --here"})
 	if text(got) != "\nPosted." || len(chat.posts) != 1 || chat.posts[0].Title != "Printers" {
 		t.Errorf("answered %q and posted %+v", text(got), chat.posts)
 	}
@@ -256,7 +305,7 @@ func TestJobs(t *testing.T) {
 		},
 	}
 
-	got := newBot(fleet, nil, nil).Handle(context.Background(), Request{Channel: bots, Text: "jobs"})
+	got := ask(newBot(fleet, nil, nil), Request{Channel: bots, Text: "jobs"})
 	if len(got.Lines) != 2 || !strings.HasPrefix(got.Lines[0], "❌ XL · new.bgcode · 30 min") ||
 		!strings.HasPrefix(got.Lines[1], "✅ MK4S-1 · old.bgcode · 1 h 00 min") {
 		t.Errorf("jobs answered %s", text(got))
@@ -277,7 +326,7 @@ func TestSnap(t *testing.T) {
 	for in, want := range cases {
 		chat := &fakeChat{}
 
-		got := newBot(fleet, chat, stills).Handle(context.Background(), Request{Channel: bots, Text: in})
+		got := ask(newBot(fleet, chat, stills), Request{Channel: bots, Text: in})
 		if !strings.Contains(text(got), want) {
 			t.Errorf("%s answered %q, want %q", in, text(got), want)
 		}
@@ -285,6 +334,19 @@ func TestSnap(t *testing.T) {
 		if want == "Posted." && (len(chat.uploads) != 1 || !strings.HasPrefix(chat.uploads[0], "MK4S-1 at ")) {
 			t.Errorf("%s uploaded %v", in, chat.uploads)
 		}
+	}
+}
+
+// TestSnapNotInChannel says to invite the bot when Slack will not take the
+// picture because the bot is not in the channel.
+func TestSnapNotInChannel(t *testing.T) {
+	fleet := fakeFleet{printers: []Printer{{ID: "a", Name: "MK4S-1"}}}
+	stills := fakeStills{cameras: map[string]error{"a": nil}}
+	chat := &fakeChat{err: fmt.Errorf("file upload: %w: not_in_channel", ErrNotInChannel)}
+
+	got := ask(newBot(fleet, chat, stills), Request{Channel: bots, Text: "snap"})
+	if !strings.Contains(text(got), "Invite it with /invite") {
+		t.Errorf("snap answered %q", text(got))
 	}
 }
 

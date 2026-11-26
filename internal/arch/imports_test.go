@@ -31,7 +31,7 @@ var allowed = map[string][]string{
 var stdlibOnly = map[string][]string{
 	"internal/domain":     {},
 	"internal/secret":     {},
-	"internal/settings":   {"internal/secret"},
+	"internal/settings":   {"internal/secret", "internal/verify"},
 	"internal/routes":     {"internal/domain"},
 	"internal/camera":     {"internal/domain"},
 	"internal/store":      {"internal/domain"},

@@ -523,7 +523,7 @@ inactive, no authorization, 404, and a changed layout.
    suspended, show why. If their member code already has an account, follow "One
    account per member code" below.
 3. **Write the journal entry:** `{op: signup, slack, code, username, at}`.
-4. Call create with role `operator` and a 20-character password from `crypto/rand`.
+4. Call create with role `operator` and a 12-character password from `crypto/rand` (about 69 bits).
    - A 409 (someone took the name between the modal and the submit) reopens the
      choice in the modal, with the next free numbered name chosen.
 5. Store the member record, and close the entry.
@@ -549,7 +549,7 @@ When `signup` finds the member code already has an account:
 |---|---|
 | Same Slack user, and the username denhac's Display Name gives is the account's username | nothing changes. If the account lapsed, it is turned back on (role `operator`, password unchanged). Otherwise: "You already have **name**. Use `password` to reset it" |
 | Same Slack user, and the **Display Name changed** (it differs from `based_on`) | the modal asks: "Your denhac name is now **new**. Replace your account **old** with a new one?" It says the old account and its sign-ins end, and that prints it made stay recorded under the old name. With confirm, the account is **replaced**, and the new username is chosen as for any signup, including the choice when it is taken. Without it, nothing changes |
-| **Another Slack user** with the same member code (for example, the member made a new Slack account) | the account is **replaced** and moves to the new Slack user. The old Slack user's link is dropped. denhac's software sets the code, so the newest Slack user carrying it is taken to be the member |
+| **Another Slack user** with the same member code | **refused**, and the account is left alone. Member codes are unique to one person (user, 2026-11-25), so this is a fault in the member data: it is logged, and the person is told to ask an admin |
 
 **Replacing an account, through the writer:**
 1. Write the journal entry `{op: replace, code, old account id, new username, slack}`.
@@ -798,7 +798,11 @@ the first install. Changing it later means a reinstall and a new data directory.
 ## State
 
 `<data dir>/state.json` is rewritten on every change: to a temporary file, synced,
-then renamed.
+then renamed. Two owners write it, the status loop and the account service. Each saves
+only its own part (`status` and `accounts`), encoded while that owner holds its own
+lock, so neither can race the other. Since 0.3.0 the file is schema 2:
+`{"schema": 2, "status": {…}, "accounts": {…}}`. Schema 1 (0.2.x, with the status
+fields at the top level) is read and converted.
 
 ```json
 {

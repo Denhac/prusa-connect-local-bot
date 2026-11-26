@@ -24,8 +24,12 @@ const team = "T0TEAM"
 // echo answers every command with its text, so a test sees what reached it.
 type echo struct{}
 
-func (echo) Handle(_ context.Context, r domain.Request) domain.Message {
-	return domain.Message{Lines: []string{"handled " + r.Text}}
+func (echo) Handle(ctx context.Context, r domain.Request, u domain.UI) {
+	_ = u.Respond(ctx, domain.Message{Lines: []string{"handled " + r.Text}})
+}
+
+func (echo) Interact(ctx context.Context, it domain.Interaction, u domain.UI) {
+	_ = u.Respond(ctx, domain.Message{Lines: []string{"clicked " + it.Action}})
 }
 
 // fakeSlack is the Web API calls the runner makes, and a response_url that
@@ -116,9 +120,16 @@ func TestAnswer(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			r, api, server := newRunner(t, f, c.guests)
+			before := len(f.answers)
 
-			got := r.answer(context.Background(), api, command(server, c.user, c.team, "bot"))
-			if text := strings.Join(got.Lines, " "); !strings.Contains(text, c.want) {
+			r.start(context.Background(), api, command(server, c.user, c.team, "bot"))
+			r.wg.Wait()
+
+			if len(f.answers) != before+1 {
+				t.Fatalf("response_url got %d answers", len(f.answers)-before)
+			}
+
+			if text := f.answers[len(f.answers)-1].Text; !strings.Contains(text, c.want) {
 				t.Errorf("answered %q, want %q", text, c.want)
 			}
 		})
@@ -127,10 +138,10 @@ func TestAnswer(t *testing.T) {
 
 func TestGuestAnswerIsCached(t *testing.T) {
 	f := &fakeSlack{users: map[string]map[string]any{"U1": {"id": "U1"}}}
-	r, api, server := newRunner(t, f, false)
+	r, api, _ := newRunner(t, f, false)
 
 	for range 3 {
-		r.answer(context.Background(), api, command(server, "U1", team, "help"))
+		r.answer(context.Background(), api, team, "U1", "help")
 	}
 
 	if f.userHits != 1 {
@@ -191,5 +202,48 @@ func TestRunStopsOnARefusedToken(t *testing.T) {
 
 	if r.Status().State != domain.SlackAuth {
 		t.Errorf("status is %+v", r.Status())
+	}
+}
+
+func TestModalView(t *testing.T) {
+	v := modalView(domain.Modal{
+		Title: "A title that is far too long for Slack", Lines: []string{"Pick one."},
+		Input:    &domain.Input{ID: "username", Label: "Username", Initial: "example.user-2"},
+		Callback: "signup-name", Submit: "Create", Meta: `{"code":"ABCD"}`,
+	})
+
+	if v.Title.Text != "A title that is far too " || v.Submit == nil || v.CallbackID != "signup-name" || v.PrivateMetadata != `{"code":"ABCD"}` {
+		t.Errorf("view is %+v", v)
+	}
+
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(encoded), `"initial_value":"example.user-2"`) || !strings.Contains(string(encoded), `"block_id":"username"`) {
+		t.Errorf("the input went out as %s", encoded)
+	}
+
+	if bare := modalView(domain.Modal{Title: "Done", Lines: []string{"x"}}); bare.Submit != nil {
+		t.Error("a window with no callback has a submit button")
+	}
+}
+
+func TestRenderButtonsAndLink(t *testing.T) {
+	encoded, err := json.Marshal(Render(domain.Message{
+		Lines:   []string{"Suspend example.user?"},
+		Link:    "https://printserver.example/link?for=A&B",
+		Buttons: []domain.Button{{Action: "suspend-confirm", Value: "tok", Label: "Suspend", Danger: true}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := string(encoded)
+	for _, want := range []string{`"action_id":"suspend-confirm"`, `"value":"tok"`, `"style":"danger"`, "\\u003chttps://printserver.example/link?for=A\\u0026amp;B\\u003e"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s in %s", want, out)
+		}
 	}
 }
