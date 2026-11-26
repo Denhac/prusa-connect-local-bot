@@ -378,8 +378,8 @@ linked admin the server confirms (0.6.0).
 | `signup` | qualifies | a modal: "creating your account…", then the username and password, once. A person whose account lapsed gets it turned back on instead, with their old password |
 | `password` | qualifies, has a member account, not suspended | a modal with the new password. It warns that every session and app pairing ended. It also turns back on an account that was off because membership had lapsed |
 | `status` | members | a window with a box for each printer and its state (checkboxes up to 10, a menu that picks several past that). The ticked printers' status replaces the list in the window, or, with "Post the answer in #bots" ticked, is posted there (0.7.0). Typed `status <printer>` and `--here` still answer at once |
-| `jobs [printer]` | members | ephemeral: the last 10 prints |
-| `snap <printer>` | members, in #bots | acknowledged at once, then a fresh still in #bots. Elsewhere: "use this in #bots" |
+| `jobs` | members | a window with a box for each printer, even one alone; the ticked printers' last 10 prints replace the list in the window (0.9.0). Typed `jobs <printer>` still answers at once |
+| `snap` (also `snapshot`, `cam`, `camera`) | members, in #bots | a window with a box for each printer that has a camera. Each ticked one's fresh still is posted in #bots, and the window says how each went (0.8.0). It opens even with one camera (0.8.1). Typed `snap <printer>` still posts at once. Elsewhere: "use this in #bots" |
 | `link` / `link <code>` | anyone with a Connect account | proves which Connect account is yours (see "Linking") |
 | `suspend <@user\|username> [reason]` | admins | confirm, then suspend. With no argument, it lists the suspensions |
 | `unsuspend <@user\|username>` | admins | confirm, then lift |

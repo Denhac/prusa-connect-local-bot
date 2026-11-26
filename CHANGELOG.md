@@ -4,6 +4,34 @@ Newest first. Each heading is a version in `module.yaml`. A change to what the
 module ships raises that version, so the server's Extensions page offers it as an
 update.
 
+## 0.9.1 - unreleased
+
+- A window whose answer was ready at once (such as `jobs` for a printer with no
+  prints) could stay at "Working on it…": the answer reached Slack before the
+  window's acknowledgement, which then replaced it. An answer ready within 2 seconds
+  now goes in the acknowledgement, and a later one waits until after it.
+- `jobs` reads each printer's history within 5 seconds, and says when it could not
+  read one, rather than "no prints".
+
+## 0.9.0 - unreleased
+
+- `jobs` opens a window with a box to tick for each printer, even when there is only
+  one, and shows the ticked printers' last prints in it. Typing a printer's name still
+  answers at once.
+
+## 0.8.1 - unreleased
+
+- `snap` opens its window even when only one printer has a camera.
+
+## 0.8.0 - unreleased
+
+- `snap` opens a window with a box to tick for each printer that has a camera, and
+  posts a fresh picture from each ticked one in #bots. The window says how each went.
+  With only one camera it posts that one at once, and typing a printer's name still
+  posts at once.
+- `snapshot`, `cam` and `camera` work as `snap`. Help lists them at the end of snap's
+  line, with no lines of their own.
+
 ## 0.7.0 - unreleased
 
 - `status` opens a window with a box to tick for each printer, showing its state. The

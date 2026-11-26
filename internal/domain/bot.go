@@ -77,8 +77,8 @@ func (b *Bot) handlers() map[string]handler {
 			return BotStatus(ctx, b.cfg.Health(), b.cfg.Fleet, b.cfg.Now())
 		}),
 		"status": b.status,
-		"jobs":   plain(b.jobs),
-		"snap":   plain(b.snap),
+		"jobs":   b.jobs,
+		"snap":   b.snap,
 		"signup": b.accounts(func(ctx context.Context, a *AccountsService, r Request, _ []string, ui UI) Message {
 			a.Signup(ctx, r, ui)
 
@@ -127,8 +127,17 @@ func (b *Bot) accounts(f func(context.Context, *AccountsService, Request, []stri
 
 // Interact answers a click or a window's submit.
 func (b *Bot) Interact(ctx context.Context, it Interaction, ui UI) {
-	if it.Callback == statusPick {
+	switch it.Callback {
+	case statusPick:
 		b.statusPicked(ctx, it, ui)
+
+		return
+	case snapPick:
+		b.snapPicked(ctx, it, ui)
+
+		return
+	case jobsPick:
+		b.jobsPicked(ctx, it, ui)
 
 		return
 	}
@@ -178,7 +187,7 @@ func (b *Bot) answer(ctx context.Context, r Request, ui UI) Message {
 		}
 	}
 
-	run, ok := b.handlers()[name]
+	run, ok := b.handlers()[c.Name]
 	if !ok {
 		return Unknown(name)
 	}
@@ -316,15 +325,7 @@ func (b *Bot) statusPicker(ctx context.Context, r Request, ui UI) (Message, bool
 	choices := make([]Choice, 0, len(printers))
 
 	for _, p := range printers {
-		state := "offline"
-		if p.Connected {
-			state = strings.ToLower(p.State)
-			if state == "" {
-				state = "online"
-			}
-		}
-
-		choices = append(choices, Choice{Value: p.ID, Label: p.Label(), Detail: state})
+		choices = append(choices, Choice{Value: p.ID, Label: p.Label(), Detail: printerState(p)})
 	}
 
 	inputs := []Input{{ID: "printers", Label: "Printers", Choices: choices}}
@@ -437,7 +438,12 @@ func (b *Bot) statusLine(ctx context.Context, p Printer) string {
 	return strings.Join(parts, " · ")
 }
 
-func (b *Bot) jobs(ctx context.Context, _ Request, args []string) Message {
+// jobsPick is the callback of the window that picks printers for jobs.
+const jobsPick = "jobs-pick"
+
+// jobs opens a window to tick printers when typed alone, even with one
+// printer. A printer's name still answers at once.
+func (b *Bot) jobs(ctx context.Context, r Request, args []string, ui UI) Message {
 	printers, err := b.printers(ctx)
 	if err != nil {
 		return say("The bot cannot read the printers right now. Try again in a moment.")
@@ -449,9 +455,60 @@ func (b *Bot) jobs(ctx context.Context, _ Request, args []string) Message {
 			return refusal
 		}
 
-		printers = []Printer{p}
+		return b.jobsOf(ctx, []Printer{p})
 	}
 
+	if len(printers) == 0 {
+		return say("The bot can see no printers.")
+	}
+
+	choices := make([]Choice, 0, len(printers))
+	for _, p := range printers {
+		choices = append(choices, Choice{Value: p.ID, Label: p.Label(), Detail: printerState(p)})
+	}
+
+	_, err = ui.OpenModal(ctx, Modal{
+		Title:    "Last prints",
+		Lines:    []string{"Tick the printers whose last prints to show."},
+		Inputs:   []Input{{ID: "printers", Label: "Printers", Choices: choices}},
+		Callback: jobsPick, Submit: "Show", Meta: r.Channel,
+	})
+	if err != nil {
+		return b.jobsOf(ctx, printers) // no window: every printer, as before
+	}
+
+	return Message{}
+}
+
+// jobsPicked shows the ticked printers' last prints in the window.
+func (b *Bot) jobsPicked(ctx context.Context, it Interaction, ui UI) {
+	printers, err := b.printers(ctx)
+	if err != nil {
+		m := Modal{Title: "Last prints", Lines: []string{"The bot cannot read the printers right now. Try again in a moment."}}
+		show(ctx, ui, it.ModalID, m, plainOf(m))
+
+		return
+	}
+
+	var picked []Printer // a new slice: the fleet's own is never written
+
+	for _, p := range printers {
+		if slices.Contains(it.Picked["printers"], p.ID) {
+			picked = append(picked, p)
+		}
+	}
+
+	msg := say("Those printers are gone. Run " + SlashCommand + " jobs again.")
+	if len(picked) > 0 {
+		msg = b.jobsOf(ctx, picked)
+	}
+
+	m := Modal{Title: "Last prints", Lines: msg.Lines}
+	show(ctx, ui, it.ModalID, m, msg)
+}
+
+// jobsOf is the last prints of some printers, newest first.
+func (b *Bot) jobsOf(ctx context.Context, printers []Printer) Message {
 	now := b.cfg.Now()
 
 	type ended struct {
@@ -459,11 +516,20 @@ func (b *Bot) jobs(ctx context.Context, _ Request, args []string) Message {
 		job     Job
 	}
 
-	var all []ended
+	var (
+		all    []ended
+		failed []string
+	)
 
 	for _, p := range printers {
-		history, err := b.cfg.Fleet.History(ctx, p.ID, now.Add(-jobsSince), jobsShown)
+		readCtx, cancel := context.WithTimeout(ctx, fleetTimeout)
+		history, err := b.cfg.Fleet.History(readCtx, p.ID, now.Add(-jobsSince), jobsShown)
+		cancel()
+
 		if err != nil {
+			b.cfg.Log.Warn("could not read a printer's print history", "printer", p.ID, "error", err)
+			failed = append(failed, p.Label())
+
 			continue
 		}
 
@@ -473,6 +539,10 @@ func (b *Bot) jobs(ctx context.Context, _ Request, args []string) Message {
 	}
 
 	if len(all) == 0 {
+		if len(failed) > 0 {
+			return say("The bot cannot read the print history of " + strings.Join(failed, ", ") + " right now. Try again in a moment.")
+		}
+
 		return say("No prints ended in the last 30 days.")
 	}
 
@@ -489,10 +559,20 @@ func (b *Bot) jobs(ctx context.Context, _ Request, args []string) Message {
 		msg.Lines = append(msg.Lines, line+" · "+clock(e.job.Ended, now))
 	}
 
+	if len(failed) > 0 {
+		msg.Lines = append(msg.Lines, "The bot cannot read the print history of "+strings.Join(failed, ", ")+" right now.")
+	}
+
 	return msg
 }
 
-func (b *Bot) snap(ctx context.Context, r Request, args []string) Message {
+// snapPick is the callback of the window that picks cameras for snap.
+const snapPick = "snap-pick"
+
+// snap posts a camera picture in the channel. Alone, it opens a window to
+// tick the printers whose cameras to post, even when there is only one. A
+// printer's name still posts at once.
+func (b *Bot) snap(ctx context.Context, r Request, args []string, ui UI) Message {
 	if b.cfg.Stills == nil || b.cfg.Chat == nil {
 		return say("No cameras are set up.")
 	}
@@ -520,21 +600,96 @@ func (b *Bot) snap(ctx context.Context, r Request, args []string) Message {
 		}
 
 		p = found
+	case len(withCamera) == 0:
+		return say("No cameras are set up.")
+	case b.snapPicker(ctx, r, ui, withCamera):
+		return Message{}
 	case len(withCamera) == 1:
-		p = withCamera[0]
+		p = withCamera[0] // no window could be opened
 	default:
 		names := make([]string, 0, len(withCamera))
 		for _, c := range withCamera {
 			names = append(names, c.Label())
 		}
 
-		if len(names) == 0 {
-			return say("No cameras are set up.")
-		}
-
 		return say("Which printer? These have a camera: " + strings.Join(names, ", ") + ".")
 	}
 
+	if failed := b.postStill(ctx, r.Channel, p); failed != "" {
+		return say(failed)
+	}
+
+	return say("Posted.")
+}
+
+// snapPicker opens the window with a box for each printer with a camera. It
+// answers false when no window can be opened.
+func (b *Bot) snapPicker(ctx context.Context, r Request, ui UI, withCamera []Printer) bool {
+	choices := make([]Choice, 0, len(withCamera))
+	for _, p := range withCamera {
+		choices = append(choices, Choice{Value: p.ID, Label: p.Label(), Detail: printerState(p)})
+	}
+
+	_, err := ui.OpenModal(ctx, Modal{
+		Title:    "Camera pictures",
+		Lines:    []string{"Tick the printers whose camera pictures to post in #bots."},
+		Inputs:   []Input{{ID: "printers", Label: "Printers", Choices: choices}},
+		Callback: snapPick, Submit: "Post", Meta: r.Channel,
+	})
+
+	return err == nil
+}
+
+// snapPicked posts a picture from each ticked printer's camera in #bots, and
+// says in the window how each went.
+func (b *Bot) snapPicked(ctx context.Context, it Interaction, ui UI) {
+	answer := func(lines ...string) {
+		m := Modal{Title: "Camera pictures", Lines: lines}
+		show(ctx, ui, it.ModalID, m, plainOf(m))
+	}
+
+	switch {
+	case b.cfg.Stills == nil || b.cfg.Chat == nil:
+		answer("No cameras are set up.")
+
+		return
+	case it.Meta == "" || it.Meta != b.cfg.StatusChannel:
+		answer("The bot posts camera pictures only in #bots.")
+
+		return
+	}
+
+	printers, err := b.printers(ctx)
+	if err != nil {
+		answer("The bot cannot read the printers right now. Try again in a moment.")
+
+		return
+	}
+
+	var lines []string
+
+	for _, p := range printers {
+		if !slices.Contains(it.Picked["printers"], p.ID) {
+			continue
+		}
+
+		if failed := b.postStill(ctx, it.Meta, p); failed != "" {
+			lines = append(lines, failed)
+		} else {
+			lines = append(lines, p.Label()+": posted in #bots.")
+		}
+	}
+
+	if len(lines) == 0 {
+		lines = []string{"Those printers are gone. Run " + SlashCommand + " snap again."}
+	}
+
+	answer(lines...)
+}
+
+// postStill takes a picture from a printer's camera and posts it in the
+// channel. It answers what went wrong, in words, or nothing.
+func (b *Bot) postStill(ctx context.Context, channel string, p Printer) string {
 	ctx, cancel := context.WithTimeout(ctx, stillTimeout)
 	defer cancel()
 
@@ -542,28 +697,41 @@ func (b *Bot) snap(ctx context.Context, r Request, args []string) Message {
 
 	switch {
 	case errors.Is(err, ErrNoCamera):
-		return say(p.Label() + " has no camera set up.")
+		return p.Label() + " has no camera set up."
 	case errors.Is(err, ErrCameraBusy):
-		return say(p.Label() + "'s camera has no recent picture. Someone may be watching live view; try again later.")
+		return p.Label() + "'s camera has no recent picture. Someone may be watching live view; try again later."
 	case errors.Is(err, ErrNoPicture):
-		return say(p.Label() + "'s camera has not sent a picture yet.")
+		return p.Label() + "'s camera has not sent a picture yet."
 	case err != nil:
 		b.cfg.Log.Warn("could not get a still", "printer", p.ID, "error", err)
 
-		return say("The bot could not get a picture from " + p.Label() + "'s camera.")
+		return "The bot could not get a picture from " + p.Label() + "'s camera."
 	}
 
 	title := p.Label() + " at " + clock(b.cfg.Now(), b.cfg.Now())
-	if err := b.cfg.Chat.Upload(ctx, r.Channel, "", jpeg, title); err != nil {
+	if err := b.cfg.Chat.Upload(ctx, channel, "", jpeg, title); err != nil {
 		b.cfg.Log.Warn("could not post a still", "printer", p.ID, "bytes", len(jpeg), "error", err)
 
 		if errors.Is(err, ErrNotInChannel) {
-			return say("The bot is not in this channel, so it cannot post the picture. " +
-				"Invite it with /invite and the bot's name, then try again.")
+			return "The bot is not in this channel, so it cannot post the picture. " +
+				"Invite it with /invite and the bot's name, then try again."
 		}
 
-		return say("The bot could not post the picture.")
+		return "The bot could not post the picture of " + p.Label() + "."
 	}
 
-	return say("Posted.")
+	return ""
+}
+
+// printerState is a printer's state in a word, for a box to tick.
+func printerState(p Printer) string {
+	if !p.Connected {
+		return "offline"
+	}
+
+	if p.State == "" {
+		return "online"
+	}
+
+	return strings.ToLower(p.State)
 }

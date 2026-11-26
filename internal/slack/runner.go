@@ -234,18 +234,24 @@ func (r *Runner) dispatch(ctx context.Context, client *socketmode.Client, api *s
 		}
 	case socketmode.EventTypeInteractive:
 		cb, ok := ev.Data.(slack.InteractionCallback)
-		if ok && cb.Type == slack.InteractionTypeViewSubmission && ev.Request != nil {
-			// Keep the window open, showing that the bot is at work; the
-			// answer replaces it.
-			if err := client.Ack(*ev.Request, slack.NewUpdateViewSubmissionResponse(working())); err != nil {
+
+		switch {
+		case ok && cb.Type == slack.InteractionTypeViewSubmission && ev.Request != nil:
+			// The window stays open. The acknowledgement carries the answer
+			// when it is ready within ackWait, and "Working on it…" when not,
+			// which the answer replaces later (see gate).
+			g := newGate(cb.View.ID)
+			r.interact(ctx, api, cb, g)
+
+			view := g.acknowledge(r.now)
+			if err := client.Ack(*ev.Request, slack.NewUpdateViewSubmissionResponse(&view)); err != nil {
 				r.log.Warn("could not acknowledge a window's submit", "error", err)
 			}
-		} else {
+		case ok && cb.Type == slack.InteractionTypeBlockActions:
 			r.ack(client, ev)
-		}
-
-		if ok && (cb.Type == slack.InteractionTypeViewSubmission || cb.Type == slack.InteractionTypeBlockActions) {
-			r.interact(ctx, api, cb)
+			r.interact(ctx, api, cb, nil)
+		default:
+			r.ack(client, ev)
 		}
 	case socketmode.EventTypeEventsAPI:
 		r.ack(client, ev)
@@ -267,7 +273,7 @@ func (r *Runner) work(ctx context.Context, u ui, run func(context.Context)) {
 	select {
 	case r.slots <- struct{}{}:
 	default:
-		_ = u.Respond(ctx, domain.Message{Lines: []string{"The bot is busy. Try again in a moment."}})
+		u.refuse(ctx, domain.Message{Lines: []string{"The bot is busy. Try again in a moment."}})
 
 		return
 	}
@@ -298,8 +304,11 @@ func (r *Runner) start(ctx context.Context, api *slack.Client, cmd slack.SlashCo
 }
 
 // interact answers a click or a window's submit.
-func (r *Runner) interact(ctx context.Context, api *slack.Client, cb slack.InteractionCallback) {
-	u := ui{api: api, http: r.http, responseURL: cb.ResponseURL, trigger: cb.TriggerID, user: cb.User.ID, replace: true}
+func (r *Runner) interact(ctx context.Context, api *slack.Client, cb slack.InteractionCallback, g *gate) {
+	u := ui{
+		api: api, http: r.http, responseURL: cb.ResponseURL, trigger: cb.TriggerID, user: cb.User.ID, replace: true,
+		gate: g, log: r.log,
+	}
 	it := domain.Interaction{User: cb.User.ID}
 
 	switch cb.Type {
@@ -331,7 +340,7 @@ func (r *Runner) interact(ctx context.Context, api *slack.Client, cb slack.Inter
 
 	r.work(ctx, u, func(ctx context.Context) {
 		if refusal, ok := r.answer(ctx, api, cb.Team.ID, cb.User.ID, "click"); !ok {
-			_ = u.Respond(ctx, refusal)
+			u.refuse(ctx, refusal)
 
 			return
 		}

@@ -16,7 +16,7 @@ title: Slack bot
 summary: Posts printer status to Slack, and lets denhac members manage their account with /prusaconnect.
 codeowner: denhac
 kind: sink
-version: 0.7.0
+version: 0.9.1
 license: MIT
 contract_major: 1
 openapi: openapi.json

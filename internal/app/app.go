@@ -42,7 +42,7 @@ import (
 // version is the manifest's version: manifest_test.go holds them together.
 const (
 	Name    = "slack-bot"
-	Version = extension.Version("0.7.0")
+	Version = extension.Version("0.9.1")
 )
 
 // Namespace is where the server mounts the module's routes: the module path

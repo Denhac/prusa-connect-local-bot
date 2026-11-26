@@ -86,8 +86,13 @@ line says what to do, then what must happen.
 - [ ] `status` in #bots opens a window listing every printer with its state. Ticking
       two and pressing Show puts their status in the window. Ticking "Post the answer
       in #bots" too posts it in #bots instead.
-- [ ] `jobs` and `snap <printer>` in #bots answer. Outside #bots, they and `status` say
-      to use #bots.
+- [ ] `snap` in #bots opens a window of the printers with a camera. Ticking two and
+      pressing Post posts a picture of each in #bots, and the window says how each went.
+      `snapshot`, `cam` and `camera` do the same, and `help` lists them only on snap's
+      line.
+- [ ] `jobs` in #bots opens a window of every printer. Ticking some and pressing Show
+      lists their last prints in the window. Outside #bots, `jobs`, `snap` and `status` say to use
+      #bots.
 - [ ] `snap` in a channel the bot is not in says to invite it.
 
 ### Accounts (phase 2)

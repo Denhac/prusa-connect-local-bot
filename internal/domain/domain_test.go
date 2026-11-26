@@ -118,6 +118,17 @@ func (u *fakeUI) last() Modal {
 	return u.modals[len(u.modals)-1]
 }
 
+// askWith runs a command through a given UI and answers what it said last.
+func askWith(b *Bot, r Request, ui *fakeUI) Message {
+	b.Handle(context.Background(), r, ui)
+
+	if len(ui.said) == 0 {
+		return Message{}
+	}
+
+	return ui.said[len(ui.said)-1]
+}
+
 // ask runs a command and answers what it said last.
 func ask(b *Bot, r Request) Message {
 	ui := &fakeUI{}
@@ -392,10 +403,45 @@ func TestJobs(t *testing.T) {
 		},
 	}
 
-	got := ask(newBot(fleet, nil, nil), Request{Channel: bots, Text: "jobs"})
+	// With no window to open, jobs alone answers for every printer.
+	got := askWith(newBot(fleet, nil, nil), Request{Channel: bots, Text: "jobs"}, &fakeUI{openErr: errors.New("no trigger")})
 	if len(got.Lines) != 2 || !strings.HasPrefix(got.Lines[0], "❌ XL · new.bgcode · 30 min") ||
 		!strings.HasPrefix(got.Lines[1], "✅ MK4S-1 · old.bgcode · 1 h 00 min") {
 		t.Errorf("jobs answered %s", text(got))
+	}
+}
+
+// TestJobsPicker opens a window of every printer, even one alone, and shows
+// the ticked printers' last prints in it.
+func TestJobsPicker(t *testing.T) {
+	fleet := fakeFleet{
+		printers: []Printer{{ID: "a", Name: "MK4S-1"}, {ID: "b", Name: "XL"}},
+		history: map[string][]Job{
+			"a": {{ID: "1", File: "old.bgcode", Outcome: OutcomeFinished, Started: start.Add(-3 * time.Hour), Ended: start.Add(-2 * time.Hour)}},
+			"b": {{ID: "2", File: "new.bgcode", Outcome: OutcomeFailed, Started: start.Add(-time.Hour), Ended: start.Add(-30 * time.Minute)}},
+		},
+	}
+	bot := newBot(fleet, nil, nil)
+
+	ui := &fakeUI{}
+	bot.Handle(context.Background(), Request{Channel: bots, Text: "jobs"}, ui)
+
+	if picker := ui.last(); picker.Callback != jobsPick || len(picker.Inputs) != 1 || len(picker.Inputs[0].Choices) != 2 || len(ui.said) != 0 {
+		t.Fatalf("jobs opened %+v and said %+v", picker, ui.said)
+	}
+
+	done := &fakeUI{}
+	bot.Interact(context.Background(), Interaction{Callback: jobsPick, ModalID: "V1", Meta: bots, Picked: map[string][]string{"printers": {"a"}}}, done)
+
+	if lines := done.last().Lines; len(lines) != 1 || !strings.HasPrefix(lines[0], "✅ MK4S-1 · old.bgcode") {
+		t.Errorf("the window shows %q", lines)
+	}
+
+	one := &fakeUI{}
+	newBot(fakeFleet{printers: []Printer{{ID: "a", Name: "MK4S-1"}}}, nil, nil).Handle(context.Background(), Request{Channel: bots, Text: "jobs"}, one)
+
+	if one.last().Callback != jobsPick {
+		t.Errorf("jobs with one printer did not open the window: %+v", one.said)
 	}
 }
 
@@ -404,7 +450,6 @@ func TestSnap(t *testing.T) {
 	stills := fakeStills{cameras: map[string]error{"a": nil, "b": ErrCameraBusy}}
 
 	cases := map[string]string{
-		"snap":      "Which printer? These have a camera: MK4S-1, XL.",
 		"snap mk4s": "Posted.",
 		"snap xl":   "XL's camera has no recent picture",
 		"snap mini": "Mini has no camera set up.",
@@ -431,9 +476,94 @@ func TestSnapNotInChannel(t *testing.T) {
 	stills := fakeStills{cameras: map[string]error{"a": nil}}
 	chat := &fakeChat{err: fmt.Errorf("file upload: %w: not_in_channel", ErrNotInChannel)}
 
-	got := ask(newBot(fleet, chat, stills), Request{Channel: bots, Text: "snap"})
+	got := ask(newBot(fleet, chat, stills), Request{Channel: bots, Text: "snap mk4s-1"})
 	if !strings.Contains(text(got), "Invite it with /invite") {
 		t.Errorf("snap answered %q", text(got))
+	}
+}
+
+// TestSnapPicker opens a window of the printers with a camera, posts a
+// picture from each ticked one in #bots, and says how each went.
+func TestSnapPicker(t *testing.T) {
+	fleet := fakeFleet{printers: []Printer{{ID: "a", Name: "MK4S-1", Connected: true, State: "IDLE"}, {ID: "b", Name: "XL"}, {ID: "c", Name: "Mini"}}}
+	stills := fakeStills{cameras: map[string]error{"a": nil, "b": ErrCameraBusy}}
+	chat := &fakeChat{}
+	bot := newBot(fleet, chat, stills)
+
+	ui := &fakeUI{}
+	bot.Handle(context.Background(), Request{Channel: bots, Text: "camera"}, ui)
+
+	picker := ui.last()
+	if picker.Callback != snapPick || picker.Meta != bots || len(picker.Inputs) != 1 || len(picker.Inputs[0].Choices) != 2 ||
+		picker.Inputs[0].Choices[0] != (Choice{Value: "a", Label: "MK4S-1", Detail: "idle"}) {
+		t.Fatalf("snap opened %+v", picker)
+	}
+
+	done := &fakeUI{}
+	bot.Interact(context.Background(), Interaction{Callback: snapPick, ModalID: "V1", Meta: bots, Picked: map[string][]string{"printers": {"a", "b"}}}, done)
+
+	lines := strings.Join(done.last().Lines, "\n")
+	if len(chat.uploads) != 1 || !strings.Contains(lines, "MK4S-1: posted in #bots.") || !strings.Contains(lines, "XL's camera has no recent picture") {
+		t.Errorf("posted %v and said %q", chat.uploads, lines)
+	}
+
+	other := &fakeUI{}
+	bot.Interact(context.Background(), Interaction{Callback: snapPick, ModalID: "V1", Meta: "C0OTHER", Picked: map[string][]string{"printers": {"a"}}}, other)
+
+	if len(chat.uploads) != 1 || !strings.Contains(strings.Join(other.last().Lines, " "), "only in #bots") {
+		t.Errorf("a window from another channel posted: %+v", other.last())
+	}
+
+	// With no window to open, it asks which printer, as before.
+	noWindow := &fakeUI{openErr: errors.New("no trigger")}
+	bot.Handle(context.Background(), Request{Channel: bots, Text: "snap"}, noWindow)
+
+	if got := text(noWindow.said[len(noWindow.said)-1]); !strings.Contains(got, "Which printer? These have a camera: MK4S-1, XL.") {
+		t.Errorf("snap with no window said %q", got)
+	}
+
+	// With one camera, it opens the window too, and posts nothing yet.
+	one, oneUI := &fakeChat{}, &fakeUI{}
+	oneBot := newBot(fleet, one, fakeStills{cameras: map[string]error{"a": nil}})
+	oneBot.Handle(context.Background(), Request{Channel: bots, Text: "snap"}, oneUI)
+
+	if len(one.uploads) != 0 || oneUI.last().Callback != snapPick || len(oneUI.last().Inputs[0].Choices) != 1 {
+		t.Errorf("snap with one camera posted %v and opened %+v", one.uploads, oneUI.last())
+	}
+
+	// With one camera and no window to open, it posts that one.
+	oneBot.Handle(context.Background(), Request{Channel: bots, Text: "snap"}, &fakeUI{openErr: errors.New("no trigger")})
+
+	if len(one.uploads) != 1 {
+		t.Errorf("snap with one camera and no window posted %v", one.uploads)
+	}
+}
+
+// TestAliases sends snapshot, cam and camera to snap, lists them on snap's
+// help line, and gives none of them a line of its own.
+func TestAliases(t *testing.T) {
+	for _, word := range []string{"snapshot", "cam", "camera", "SNAPSHOT"} {
+		name, _ := Parse(word)
+		if c, ok := Lookup(name); !ok || c.Name != "snap" {
+			t.Errorf("%s finds %+v", word, c)
+		}
+	}
+
+	help := helpText(Help(true))
+	if !strings.Contains(help, "Also: snapshot, cam, camera.") || strings.Contains(help, SlashCommand+" cam ") {
+		t.Errorf("help is\n%s", help)
+	}
+
+	words := map[string]bool{}
+
+	for _, c := range Commands() {
+		for _, w := range append([]string{c.Name}, c.Aliases...) {
+			if words[w] {
+				t.Errorf("%q names two commands", w)
+			}
+
+			words[w] = true
+		}
 	}
 }
 

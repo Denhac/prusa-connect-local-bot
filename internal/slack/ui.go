@@ -26,6 +26,10 @@ type ui struct {
 	user        string
 	// replace makes an answer replace the message a button was clicked in.
 	replace bool
+	// gate orders the answers to a window's submit after its
+	// acknowledgement. Nil for a command or a click.
+	gate *gate
+	log  *slog.Logger
 }
 
 // Respond answers the person alone, through response_url. With none, as after
@@ -48,6 +52,18 @@ func (u ui) Respond(ctx context.Context, m domain.Message) error {
 	return nil
 }
 
+// refuse answers a refusal: in the window, for a window's submit, so it does
+// not stay at "Working on it…", and as an answer otherwise.
+func (u ui) refuse(ctx context.Context, m domain.Message) {
+	if u.gate != nil {
+		_ = u.UpdateModal(ctx, u.gate.id, domain.Modal{Title: "Printer bot", Lines: m.Lines})
+
+		return
+	}
+
+	_ = u.Respond(ctx, m)
+}
+
 // OpenModal opens a window, which needs the trigger of the last few seconds.
 func (u ui) OpenModal(ctx context.Context, m domain.Modal) (string, error) {
 	if u.trigger == "" {
@@ -65,7 +81,23 @@ func (u ui) OpenModal(ctx context.Context, m domain.Modal) (string, error) {
 // UpdateModal replaces an open window. A window the person closed answers an
 // error, and the caller then answers some other way.
 func (u ui) UpdateModal(ctx context.Context, id string, m domain.Modal) error {
-	if _, err := u.api.UpdateViewContext(ctx, modalView(m), "", "", id); err != nil {
+	view := modalView(m)
+
+	if u.gate != nil && id == u.gate.id {
+		if u.gate.offer(view) {
+			return nil // sent in the acknowledgement
+		}
+
+		if err := u.gate.wait(ctx); err != nil {
+			return fmt.Errorf("views.update: %w", err)
+		}
+	}
+
+	if _, err := u.api.UpdateViewContext(ctx, view, "", "", id); err != nil {
+		if u.log != nil {
+			u.log.Warn("could not update a window", "error", err)
+		}
+
 		return fmt.Errorf("views.update: %w", err)
 	}
 

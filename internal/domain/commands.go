@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"strings"
 )
 
@@ -46,6 +47,9 @@ type Command struct {
 	Who Who
 	// Group is the heading help lists it under.
 	Group string
+	// Aliases are other words for it. Help names them on its line, and lists
+	// no line of their own.
+	Aliases []string
 }
 
 // SlashCommand is the command people type in Slack.
@@ -67,8 +71,9 @@ func Commands() []Command {
 
 	return []Command{
 		{Name: "status", Summary: "Tick printers and see what they are doing, or post it in #bots.", Who: InBots, Group: groupPrinters},
-		{Name: "jobs", Usage: "[printer]", Summary: "The last prints.", Who: InBots, Group: groupPrinters},
-		{Name: "snap", Usage: "[printer]", Summary: "A picture from a printer's camera, posted in the channel.", Who: InBots, Group: groupPrinters},
+		{Name: "jobs", Summary: "Tick printers and see their last prints.", Who: InBots, Group: groupPrinters},
+		{Name: "snap", Summary: "Tick printers and post a picture from each one's camera in #bots.", Who: InBots, Group: groupPrinters,
+			Aliases: []string{"snapshot", "cam", "camera"}},
 		{Name: "signup", Summary: "Make your account (denhac members with 3D Printer User).", Who: Anyone, Group: groupAccount},
 		{Name: "password", Summary: "Set a new password on your account.", Who: Anyone, Group: groupAccount},
 		{Name: "whoami", Summary: "What the bot knows about you.", Who: Anyone, Group: groupAccount},
@@ -83,10 +88,10 @@ func Commands() []Command {
 	}
 }
 
-// Lookup finds a command by its word.
+// Lookup finds a command by its word or one of its aliases.
 func Lookup(name string) (Command, bool) {
 	for _, c := range Commands() {
-		if c.Name == name {
+		if c.Name == name || slices.Contains(c.Aliases, name) {
 			return c, true
 		}
 	}
@@ -124,8 +129,13 @@ func Help(admin bool) Message {
 			groups = append(groups, Group{Heading: c.Group})
 		}
 
+		text := c.Summary
+		if len(c.Aliases) > 0 {
+			text += " Also: " + strings.Join(c.Aliases, ", ") + "."
+		}
+
 		last := &groups[len(groups)-1]
-		last.Items = append(last.Items, Item{Code: usage, Text: c.Summary})
+		last.Items = append(last.Items, Item{Code: usage, Text: text})
 	}
 
 	return Message{
