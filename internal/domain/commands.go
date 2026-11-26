@@ -66,7 +66,7 @@ func Commands() []Command {
 	const who = "<@user|username|member code>"
 
 	return []Command{
-		{Name: "status", Usage: "[printer] [--here]", Summary: "What the printers are doing. --here posts it in the channel.", Who: InBots, Group: groupPrinters},
+		{Name: "status", Summary: "Tick printers and see what they are doing, or post it in #bots.", Who: InBots, Group: groupPrinters},
 		{Name: "jobs", Usage: "[printer]", Summary: "The last prints.", Who: InBots, Group: groupPrinters},
 		{Name: "snap", Usage: "[printer]", Summary: "A picture from a printer's camera, posted in the channel.", Who: InBots, Group: groupPrinters},
 		{Name: "signup", Summary: "Make your account (denhac members with 3D Printer User).", Who: Anyone, Group: groupAccount},

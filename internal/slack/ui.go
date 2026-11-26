@@ -98,16 +98,15 @@ func modalView(m domain.Modal) slack.ModalViewRequest {
 
 	blocks := Render(domain.Message{Lines: m.Lines, Fields: m.Fields, Link: m.Link})
 
-	if in := m.Input; in != nil {
-		element := slack.NewPlainTextInputBlockElement(nil, in.ID)
-		element.InitialValue = in.Initial
-
+	for _, in := range m.Inputs {
 		var hint *slack.TextBlockObject
 		if in.Hint != "" {
 			hint = plain(in.Hint)
 		}
 
-		blocks = append(blocks, slack.NewInputBlock(in.ID, plain(in.Label), hint, element))
+		block := slack.NewInputBlock(in.ID, plain(in.Label), hint, inputElement(in))
+		block.Optional = in.Optional
+		blocks = append(blocks, block)
 	}
 
 	view := slack.ModalViewRequest{
@@ -124,6 +123,55 @@ func modalView(m domain.Modal) slack.ModalViewRequest {
 	}
 
 	return view
+}
+
+// Slack's limits on choices: checkboxes take at most 10, a menu 100, and an
+// option's text and description 75 characters each.
+const (
+	maxCheckboxes  = 10
+	maxMenuOptions = 100
+	maxOptionText  = 75
+)
+
+// inputElement is a field's element: a line of text, checkboxes, or for more
+// choices than checkboxes take, a menu that picks several.
+func inputElement(in domain.Input) slack.BlockElement {
+	if len(in.Choices) == 0 {
+		element := slack.NewPlainTextInputBlockElement(nil, in.ID)
+		element.InitialValue = in.Initial
+
+		return element
+	}
+
+	choices := in.Choices
+	if len(choices) > maxMenuOptions {
+		choices = choices[:maxMenuOptions]
+	}
+
+	options := make([]*slack.OptionBlockObject, 0, len(choices))
+
+	for _, c := range choices {
+		var detail *slack.TextBlockObject
+		if c.Detail != "" && len(in.Choices) <= maxCheckboxes {
+			detail = plain(cut(c.Detail, maxOptionText))
+		}
+
+		options = append(options, slack.NewOptionBlockObject(c.Value, plain(cut(c.Label, maxOptionText)), detail))
+	}
+
+	if len(in.Choices) <= maxCheckboxes {
+		return slack.NewCheckboxGroupsBlockElement(in.ID, options...)
+	}
+
+	return slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeStatic, plain("Pick one or more"), in.ID, options...)
+}
+
+func cut(text string, most int) string {
+	if r := []rune(text); len(r) > most {
+		return string(r[:most-1]) + "…"
+	}
+
+	return text
 }
 
 // working is what a submitted window shows while the bot works.

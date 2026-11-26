@@ -83,8 +83,11 @@ line says what to do, then what must happen.
       the thread.
 - [ ] A printer that waits for a person (`awaiting_operator`) posts once. A printer
       that drops off mid-print posts once.
-- [ ] `status`, `jobs` and `snap <printer>` in #bots answer. Outside #bots they say to
-      use #bots.
+- [ ] `status` in #bots opens a window listing every printer with its state. Ticking
+      two and pressing Show puts their status in the window. Ticking "Post the answer
+      in #bots" too posts it in #bots instead.
+- [ ] `jobs` and `snap <printer>` in #bots answer. Outside #bots, they and `status` say
+      to use #bots.
 - [ ] `snap` in a channel the bot is not in says to invite it.
 
 ### Accounts (phase 2)

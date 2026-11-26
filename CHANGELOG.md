@@ -4,6 +4,14 @@ Newest first. Each heading is a version in `module.yaml`. A change to what the
 module ships raises that version, so the server's Extensions page offers it as an
 update.
 
+## 0.7.0 - unreleased
+
+- `status` opens a window with a box to tick for each printer, showing its state. The
+  ticked printers' status replaces the list in the window, or is posted in #bots when
+  "Post the answer in #bots" is ticked. Typing a printer's name, or `--here`, still
+  answers at once.
+- Windows can hold several fields, and boxes to tick (a menu past 10 choices).
+
 ## 0.6.2 - unreleased
 
 - No more limit of 3 signups or password resets per person a day.

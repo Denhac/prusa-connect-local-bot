@@ -26,8 +26,8 @@ type Modal struct {
 	Fields []Field
 	// Link is an address drawn as a link after the fields, if any.
 	Link string
-	// Input is one text field, if any.
-	Input *Input
+	// Inputs are the fields, in order.
+	Inputs []Input
 	// Callback names what a submit is for. Empty is a window with no submit.
 	Callback string
 	Submit   string
@@ -35,12 +35,24 @@ type Modal struct {
 	Meta string
 }
 
-// Input is one text field in a window.
+// Input is one field in a window: a line of text, or with Choices, boxes to
+// tick, one or more.
 type Input struct {
 	ID      string
 	Label   string
 	Initial string
 	Hint    string
+	// Choices make the field a set of boxes to tick.
+	Choices []Choice
+	// Optional lets the window be sent with the field left empty.
+	Optional bool
+}
+
+// Choice is one box to tick. Value comes back in Interaction.Picked.
+type Choice struct {
+	Value  string
+	Label  string
+	Detail string
 }
 
 // Interaction is a click on a button or the submit of a window.
@@ -49,9 +61,11 @@ type Interaction struct {
 	// Action and Value are a button's.
 	Action string
 	Value  string
-	// Callback, Meta, Inputs and ModalID are a window's.
+	// Callback, Meta, Inputs, Picked and ModalID are a window's: the text
+	// typed into each field, and the choices ticked in each field, by its ID.
 	Callback string
 	Meta     string
 	Inputs   map[string]string
+	Picked   map[string][]string
 	ModalID  string
 }

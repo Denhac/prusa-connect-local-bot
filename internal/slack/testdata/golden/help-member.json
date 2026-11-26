@@ -19,7 +19,7 @@
     "type": "section",
     "text": {
       "type": "mrkdwn",
-      "text": "*Printers (in #bots)*\n`/prusaconnect status [printer] [--here]`  What the printers are doing. --here posts it in the channel.\n`/prusaconnect jobs [printer]`  The last prints.\n`/prusaconnect snap [printer]`  A picture from a printer's camera, posted in the channel."
+      "text": "*Printers (in #bots)*\n`/prusaconnect status`  Tick printers and see what they are doing, or post it in #bots.\n`/prusaconnect jobs [printer]`  The last prints.\n`/prusaconnect snap [printer]`  A picture from a printer's camera, posted in the channel."
     }
   },
   {

@@ -76,7 +76,7 @@ func (b *Bot) handlers() map[string]handler {
 		"bot": plain(func(ctx context.Context, _ Request, _ []string) Message {
 			return BotStatus(ctx, b.cfg.Health(), b.cfg.Fleet, b.cfg.Now())
 		}),
-		"status": plain(b.status),
+		"status": b.status,
 		"jobs":   plain(b.jobs),
 		"snap":   plain(b.snap),
 		"signup": b.accounts(func(ctx context.Context, a *AccountsService, r Request, _ []string, ui UI) Message {
@@ -127,6 +127,12 @@ func (b *Bot) accounts(f func(context.Context, *AccountsService, Request, []stri
 
 // Interact answers a click or a window's submit.
 func (b *Bot) Interact(ctx context.Context, it Interaction, ui UI) {
+	if it.Callback == statusPick {
+		b.statusPicked(ctx, it, ui)
+
+		return
+	}
+
 	a := b.cfg.Accounts
 	if a == nil {
 		return
@@ -228,7 +234,18 @@ func pick(printers []Printer, name string) (Printer, Message, bool) {
 	return Printer{}, say("There is no printer \""+name+"\".", "The printers are: "+strings.Join(names, ", ")+"."), false
 }
 
-func (b *Bot) status(ctx context.Context, r Request, args []string) Message {
+// statusPick is the callback of the window that picks printers for status.
+const statusPick = "status-pick"
+
+// status opens a window to pick printers when typed alone. A printer's name,
+// or --here, still answers at once, for people who type them.
+func (b *Bot) status(ctx context.Context, r Request, args []string, ui UI) Message {
+	if len(args) == 0 {
+		if msg, ok := b.statusPicker(ctx, r, ui); ok {
+			return msg
+		}
+	}
+
 	here := slices.Contains(args, "--here")
 	args = slices.DeleteFunc(slices.Clone(args), func(a string) bool { return a == "--here" })
 
@@ -250,11 +267,7 @@ func (b *Bot) status(ctx context.Context, r Request, args []string) Message {
 		return say("The bot can see no printers.")
 	}
 
-	msg := Message{Title: "Printers"}
-
-	for _, p := range printers {
-		msg.Fields = append(msg.Fields, Field{Label: p.Label(), Value: b.statusLine(ctx, p)})
-	}
+	msg := b.statusOf(ctx, printers)
 
 	if !here || b.cfg.Chat == nil {
 		return msg
@@ -265,6 +278,133 @@ func (b *Bot) status(ctx context.Context, r Request, args []string) Message {
 	}
 
 	return say("Posted.")
+}
+
+// statusOf is the answer for some printers.
+func (b *Bot) statusOf(ctx context.Context, printers []Printer) Message {
+	msg := Message{Title: "Printers"}
+
+	for _, p := range printers {
+		msg.Fields = append(msg.Fields, Field{Label: p.Label(), Value: b.statusLine(ctx, p)})
+	}
+
+	return msg
+}
+
+// statusPicker opens the window with a box to tick for each printer. It
+// answers false when no window can be opened, and status then answers for
+// every printer instead.
+func (b *Bot) statusPicker(ctx context.Context, r Request, ui UI) (Message, bool) {
+	id, err := ui.OpenModal(ctx, Modal{Title: "Printer status", Lines: []string{"Reading the printers…"}})
+	if err != nil {
+		return Message{}, false
+	}
+
+	printers, err := b.printers(ctx)
+
+	switch {
+	case err != nil:
+		_ = ui.UpdateModal(ctx, id, Modal{Title: "Printer status", Lines: []string{"The bot cannot read the printers right now. Try again in a moment."}})
+
+		return Message{}, true
+	case len(printers) == 0:
+		_ = ui.UpdateModal(ctx, id, Modal{Title: "Printer status", Lines: []string{"The bot can see no printers."}})
+
+		return Message{}, true
+	}
+
+	choices := make([]Choice, 0, len(printers))
+
+	for _, p := range printers {
+		state := "offline"
+		if p.Connected {
+			state = strings.ToLower(p.State)
+			if state == "" {
+				state = "online"
+			}
+		}
+
+		choices = append(choices, Choice{Value: p.ID, Label: p.Label(), Detail: state})
+	}
+
+	inputs := []Input{{ID: "printers", Label: "Printers", Choices: choices}}
+	if b.cfg.Chat != nil {
+		inputs = append(inputs, Input{
+			ID: "post", Label: "Share", Optional: true,
+			Choices: []Choice{{Value: "post", Label: "Post the answer in #bots for everyone"}},
+		})
+	}
+
+	_ = ui.UpdateModal(ctx, id, Modal{
+		Title:  "Printer status",
+		Lines:  []string{"Tick the printers to look at."},
+		Inputs: inputs, Callback: statusPick, Submit: "Show", Meta: r.Channel,
+	})
+
+	return Message{}, true
+}
+
+// statusPicked answers the window: the ticked printers' status, in the window
+// or posted in #bots.
+func (b *Bot) statusPicked(ctx context.Context, it Interaction, ui UI) {
+	answer := func(lines ...string) {
+		m := Modal{Title: "Printer status", Lines: lines}
+		show(ctx, ui, it.ModalID, m, plainOf(m))
+	}
+
+	printers, err := b.printers(ctx)
+	if err != nil {
+		answer("The bot cannot read the printers right now. Try again in a moment.")
+
+		return
+	}
+
+	var picked []Printer // a new slice: the fleet's own is never written
+
+	for _, p := range printers {
+		if slices.Contains(it.Picked["printers"], p.ID) {
+			picked = append(picked, p)
+		}
+	}
+
+	printers = picked
+	if len(printers) == 0 {
+		answer("Those printers are gone. Run " + SlashCommand + " status again.")
+
+		return
+	}
+
+	msg := b.statusOf(ctx, printers)
+
+	if len(it.Picked["post"]) == 0 || b.cfg.Chat == nil {
+		m := Modal{Title: "Printer status", Fields: msg.Fields}
+		show(ctx, ui, it.ModalID, m, msg)
+
+		return
+	}
+
+	// The window was opened from the status channel, and posts only there.
+	if it.Meta == "" || it.Meta != b.cfg.StatusChannel {
+		answer("The bot posts printer status only in #bots.")
+
+		return
+	}
+
+	if _, err := b.cfg.Chat.Post(ctx, it.Meta, msg); err != nil {
+		b.cfg.Log.Warn("could not post the status", "error", err)
+
+		if errors.Is(err, ErrNotInChannel) {
+			answer("The bot is not in #bots, so it cannot post there. Invite it with /invite and the bot's name.")
+
+			return
+		}
+
+		answer("The bot could not post in #bots. Try again in a moment.")
+
+		return
+	}
+
+	answer("Posted in #bots.")
 }
 
 // statusLine is one printer in a word or two: its state, its print and its

@@ -313,7 +313,7 @@ func TestSignupNameTaken(t *testing.T) {
 	w.svc.Signup(context.Background(), Request{User: "U1"}, ui)
 
 	ask := ui.last()
-	if ask.Callback != "signup-name" || ask.Input == nil || ask.Input.Initial != "example.user-2" ||
+	if ask.Callback != "signup-name" || len(ask.Inputs) != 1 || ask.Inputs[0].Initial != "example.user-2" ||
 		!strings.Contains(linesOf(ask), `"example.user" is taken`) {
 		t.Fatalf("asked %+v", ask)
 	}

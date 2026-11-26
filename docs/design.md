@@ -377,7 +377,7 @@ linked admin the server confirms (0.6.0).
 | `whoami` | anyone | ephemeral: the account, its state, and whether you qualify (and why not) |
 | `signup` | qualifies | a modal: "creating your account…", then the username and password, once. A person whose account lapsed gets it turned back on instead, with their old password |
 | `password` | qualifies, has a member account, not suspended | a modal with the new password. It warns that every session and app pairing ended. It also turns back on an account that was off because membership had lapsed |
-| `status [printer]` | members | ephemeral. With `--here` in #bots, posted there |
+| `status` | members | a window with a box for each printer and its state (checkboxes up to 10, a menu that picks several past that). The ticked printers' status replaces the list in the window, or, with "Post the answer in #bots" ticked, is posted there (0.7.0). Typed `status <printer>` and `--here` still answer at once |
 | `jobs [printer]` | members | ephemeral: the last 10 prints |
 | `snap <printer>` | members, in #bots | acknowledged at once, then a fresh still in #bots. Elsewhere: "use this in #bots" |
 | `link` / `link <code>` | anyone with a Connect account | proves which Connect account is yours (see "Linking") |

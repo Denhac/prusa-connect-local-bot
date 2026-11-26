@@ -311,12 +311,19 @@ func (r *Runner) interact(ctx context.Context, api *slack.Client, cb slack.Inter
 		it.Action, it.Value = cb.ActionCallback.BlockActions[0].ActionID, cb.ActionCallback.BlockActions[0].Value
 	case slack.InteractionTypeViewSubmission:
 		it.Callback, it.Meta, it.ModalID = cb.View.CallbackID, cb.View.PrivateMetadata, cb.View.ID
-		it.Inputs = map[string]string{}
+		it.Inputs, it.Picked = map[string]string{}, map[string][]string{}
 
 		if cb.View.State != nil {
 			for _, actions := range cb.View.State.Values {
 				for id, action := range actions {
-					it.Inputs[id] = action.Value
+					switch action.Type {
+					case slack.ActionType(slack.METCheckboxGroups), slack.ActionType(slack.MultiOptTypeStatic):
+						for _, o := range action.SelectedOptions {
+							it.Picked[id] = append(it.Picked[id], o.Value)
+						}
+					default:
+						it.Inputs[id] = action.Value
+					}
 				}
 			}
 		}

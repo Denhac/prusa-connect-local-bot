@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -208,7 +209,7 @@ func TestRunStopsOnARefusedToken(t *testing.T) {
 func TestModalView(t *testing.T) {
 	v := modalView(domain.Modal{
 		Title: "A title that is far too long for Slack", Lines: []string{"Pick one."},
-		Input:    &domain.Input{ID: "username", Label: "Username", Initial: "example.user-2"},
+		Inputs:   []domain.Input{{ID: "username", Label: "Username", Initial: "example.user-2"}},
 		Callback: "signup-name", Submit: "Create", Meta: `{"code":"ABCD"}`,
 	})
 
@@ -227,6 +228,36 @@ func TestModalView(t *testing.T) {
 
 	if bare := modalView(domain.Modal{Title: "Done", Lines: []string{"x"}}); bare.Submit != nil {
 		t.Error("a window with no callback has a submit button")
+	}
+}
+
+// TestModalChoices draws up to 10 choices as checkboxes with their details,
+// more as a menu that picks several, and an optional field as optional.
+func TestModalChoices(t *testing.T) {
+	few := []domain.Choice{{Value: "a", Label: "MK4S-1", Detail: "printing"}, {Value: "b", Label: "XL"}}
+
+	encoded, err := json.Marshal(modalView(domain.Modal{Title: "Printer status", Inputs: []domain.Input{
+		{ID: "printers", Label: "Printers", Choices: few},
+		{ID: "post", Label: "Share", Optional: true, Choices: []domain.Choice{{Value: "post", Label: "Post it"}}},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{`"type":"checkboxes"`, `"action_id":"printers"`, `"value":"a"`, `"text":"printing"`, `"optional":true`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("the window lacks %s: %s", want, encoded)
+		}
+	}
+
+	var many []domain.Choice
+	for i := range 12 {
+		many = append(many, domain.Choice{Value: fmt.Sprint(i), Label: fmt.Sprint("printer ", i), Detail: "idle"})
+	}
+
+	encoded, _ = json.Marshal(modalView(domain.Modal{Inputs: []domain.Input{{ID: "printers", Label: "Printers", Choices: many}}}))
+	if !strings.Contains(string(encoded), `"type":"multi_static_select"`) || strings.Contains(string(encoded), `"description"`) {
+		t.Errorf("12 choices went out as %s", encoded)
 	}
 }
 

@@ -83,11 +83,16 @@ type fakeUI struct {
 	modals    []Modal
 	dms       []Message
 	updateErr error
+	openErr   error
 }
 
 func (u *fakeUI) Respond(_ context.Context, m Message) error { u.said = append(u.said, m); return nil }
 
 func (u *fakeUI) OpenModal(_ context.Context, m Modal) (string, error) {
+	if u.openErr != nil {
+		return "", u.openErr
+	}
+
 	u.modals = append(u.modals, m)
 
 	return "V1", nil
@@ -291,7 +296,10 @@ func TestStatus(t *testing.T) {
 		current: map[string]*Job{"a": {ID: "j1", File: "bracket.bgcode", Progress: 45, TimeRemaining: 70 * time.Minute}},
 	}
 
-	got := ask(newBot(fleet, nil, nil), Request{Channel: bots, Text: "status"})
+	// With no window to open, status alone answers for every printer.
+	ui := &fakeUI{openErr: errors.New("no trigger")}
+	newBot(fleet, nil, nil).Handle(context.Background(), Request{Channel: bots, Text: "status"}, ui)
+	got := ui.said[len(ui.said)-1]
 	want := "Printers\n" +
 		"Mini: offline\n" +
 		"MK4S-1: printing · 45% of bracket.bgcode, 1 h 10 min to go · nozzle 215/215 °C · bed 60/60 °C\n" +
@@ -309,6 +317,59 @@ func TestStatus(t *testing.T) {
 	none := ask(newBot(fleet, nil, nil), Request{Channel: bots, Text: "status nope"})
 	if !strings.Contains(text(none), "The printers are: Mini, MK4S-1, XL") {
 		t.Errorf("status nope answered %s", text(none))
+	}
+}
+
+// TestStatusPicker opens a window with a box for each printer, and answers
+// the ticked ones in the window, or posted in #bots.
+func TestStatusPicker(t *testing.T) {
+	fleet := fakeFleet{printers: []Printer{
+		{ID: "a", Name: "MK4S-1", Connected: true, State: "PRINTING"},
+		{ID: "b", Name: "XL", Connected: true, State: "IDLE"},
+		{ID: "c", Name: "Mini"},
+	}}
+	chat := &fakeChat{}
+	bot := newBot(fleet, chat, nil)
+
+	ui := &fakeUI{}
+	bot.Handle(context.Background(), Request{Channel: bots, Text: "status"}, ui)
+
+	picker := ui.last()
+	if len(ui.said) != 0 || picker.Callback != statusPick || picker.Meta != bots || len(picker.Inputs) != 2 {
+		t.Fatalf("status opened %+v and said %+v", picker, ui.said)
+	}
+
+	choices := picker.Inputs[0].Choices
+	if len(choices) != 3 || choices[1] != (Choice{Value: "a", Label: "MK4S-1", Detail: "printing"}) || choices[0].Detail != "offline" ||
+		!picker.Inputs[1].Optional {
+		t.Errorf("the choices are %+v", picker.Inputs)
+	}
+
+	submit := func(picked map[string][]string, meta string) *fakeUI {
+		ui := &fakeUI{}
+		bot.Interact(context.Background(), Interaction{Callback: statusPick, ModalID: "V1", Meta: meta, Picked: picked}, ui)
+
+		return ui
+	}
+
+	shown := submit(map[string][]string{"printers": {"b", "c"}}, bots).last()
+	if len(shown.Fields) != 2 || shown.Fields[0].Value != "offline" || shown.Fields[1].Label != "XL" || len(chat.posts) != 0 {
+		t.Errorf("the window shows %+v", shown)
+	}
+
+	posted := submit(map[string][]string{"printers": {"a"}, "post": {"post"}}, bots).last()
+	if !strings.Contains(strings.Join(posted.Lines, " "), "Posted in #bots") || len(chat.posts) != 1 || len(chat.posts[0].Fields) != 1 {
+		t.Errorf("posting showed %+v and posted %+v", posted, chat.posts)
+	}
+
+	elsewhere := submit(map[string][]string{"printers": {"a"}, "post": {"post"}}, "C0OTHER").last()
+	if !strings.Contains(strings.Join(elsewhere.Lines, " "), "only in #bots") || len(chat.posts) != 1 {
+		t.Errorf("a window from another channel posted: %+v", elsewhere)
+	}
+
+	gone := submit(map[string][]string{"printers": {"zz"}}, bots).last()
+	if !strings.Contains(strings.Join(gone.Lines, " "), "gone") {
+		t.Errorf("a printer that went away: %+v", gone)
 	}
 }
 

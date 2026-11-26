@@ -381,7 +381,7 @@ func (s *AccountsService) choose(ctx context.Context, ui UI, id string, r Reques
 	w := Modal{
 		Title:    "Sign up",
 		Lines:    []string{problem, "Take the suggestion below, or type a username of your own."},
-		Input:    &Input{ID: "username", Label: "Username", Initial: suggest, Hint: "Lower-case letters, digits, '.', '_' and '-'."},
+		Inputs:   []Input{{ID: "username", Label: "Username", Initial: suggest, Hint: "Lower-case letters, digits, '.', '_' and '-'."}},
 		Callback: "signup-name", Submit: "Create", Meta: string(meta),
 	}
 	show(ctx, ui, id, w, Message{Lines: []string{problem + " Run " + SlashCommand + " signup again to choose another."}})
