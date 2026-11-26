@@ -104,6 +104,17 @@ func (f *accountServer) start(t *testing.T) *Accounts {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	mux.HandleFunc("GET /api/v1/grants/subject/{subject}/direct", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+
+		items := []map[string]string{}
+		if r.PathValue("subject") == "user:m1" {
+			items = append(items, map[string]string{"object": "device:xl", "relation": "operator", "subject": "user:m1"})
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"subject": r.PathValue("subject"), "items": items})
+	})
+
 	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 
@@ -194,5 +205,63 @@ func TestChanges(t *testing.T) {
 
 	if err := a.Delete(ctx, "m1"); err != nil {
 		t.Errorf("deleting a deleted account: %v", err)
+	}
+}
+
+// TestDirectGrants reads the grants written for one account on single printers.
+func TestDirectGrants(t *testing.T) {
+	f := newAccountServer()
+	a := f.start(t)
+
+	got, err := a.DirectGrants(context.Background(), "m1")
+	if err != nil || len(got) != 1 || got[0] != "operator on device:xl" {
+		t.Errorf("DirectGrants(m1) = %v, %v", got, err)
+	}
+
+	got, err = a.DirectGrants(context.Background(), "new1")
+	if err != nil || len(got) != 0 {
+		t.Errorf("DirectGrants(new1) = %v, %v", got, err)
+	}
+}
+
+// TestMakeAdminAndUnadmin writes admin only on an operator account, takes it
+// away only as operator or viewer, and never touches the bot's own account.
+func TestMakeAdminAndUnadmin(t *testing.T) {
+	f := newAccountServer()
+	a := f.start(t)
+	ctx := context.Background()
+
+	if err := a.MakeAdmin(ctx, "m1"); err != nil || f.accounts["m1"]["role"] != "admin" {
+		t.Fatalf("MakeAdmin(m1) = %v; role %v", err, f.accounts["m1"]["role"])
+	}
+
+	if err := a.SetRole(ctx, "m1", domain.RoleViewer); !errors.Is(err, domain.ErrAdminAccount) {
+		t.Errorf("SetRole on the new admin = %v; it must still refuse", err)
+	}
+
+	if err := a.Unadmin(ctx, "m1", domain.RoleAdmin); err == nil {
+		t.Error("Unadmin wrote admin")
+	}
+
+	if err := a.Unadmin(ctx, "m1", domain.RoleViewer); err != nil || f.accounts["m1"]["role"] != "viewer" {
+		t.Errorf("Unadmin(m1) = %v; role %v", err, f.accounts["m1"]["role"])
+	}
+
+	if err := a.MakeAdmin(ctx, "m1"); err == nil {
+		t.Error("MakeAdmin took a viewer account")
+	}
+
+	f.calls = nil
+
+	if err := a.MakeAdmin(ctx, "bot"); err == nil {
+		t.Error("MakeAdmin took the bot's own account")
+	}
+
+	if err := a.Unadmin(ctx, "bot", domain.RoleViewer); !errors.Is(err, domain.ErrAdminAccount) {
+		t.Errorf("Unadmin(bot) = %v", err)
+	}
+
+	if len(f.calls) != 0 {
+		t.Errorf("sent %v for the bot's own account", f.calls)
 	}
 }

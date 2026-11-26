@@ -66,6 +66,8 @@ func Commands() []Command {
 		{Name: "suspend", Usage: "[@user|username|member code] [reason]", Summary: "Turn an account off until an admin lifts it. Alone, lists the suspensions.", Who: Admins},
 		{Name: "unsuspend", Usage: "<@user|username|member code>", Summary: "Lift a suspension.", Who: Admins},
 		{Name: "lookup", Usage: "<@user|username|member code>", Summary: "Which member code, Slack user and account belong together.", Who: Admins},
+		{Name: "admin", Usage: "<@user|username|member code>", Summary: "Make a member's account an admin.", Who: Admins},
+		{Name: "unadmin", Usage: "<@user|username|member code>", Summary: "Take admin from an account the bot made an admin.", Who: Admins},
 	}
 }
 

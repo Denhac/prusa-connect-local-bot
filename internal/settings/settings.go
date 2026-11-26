@@ -11,10 +11,13 @@
 package settings
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/denhac/prusa-connect-local-bot/internal/secret"
 	"github.com/denhac/prusa-connect-local-bot/internal/verify"
@@ -22,8 +25,18 @@ import (
 
 // The defaults module.yaml also declares, used when a value arrives empty.
 const (
-	DefaultServerURL     = "http://127.0.0.1:8080"
-	DefaultAdminUsername = "slackbot"
+	DefaultServerURL       = "http://127.0.0.1:8080"
+	DefaultAdminUsername   = "slackbot"
+	DefaultSweepInterval   = 24 * time.Hour
+	DefaultSweepMaxChanges = 5
+	DefaultDeleteAfter     = 90 * 24 * time.Hour
+)
+
+// The bounds of the sweep settings.
+const (
+	minSweepInterval = time.Hour
+	minDeleteAfter   = time.Hour
+	maxSweepChanges  = 1000
 )
 
 // ErrInvalid is a value the module cannot use. The message names the key,
@@ -43,6 +56,37 @@ type Sent struct {
 	AdminPassword secret.Secret     `json:"admin_password"`
 	PublicURL     string            `json:"public_url"`
 	Verify        *verify.Config    `json:"verify"`
+	// The sweep. Durations arrive as text, as time.ParseDuration reads them.
+	SweepInterval   string `json:"sweep_interval"`
+	SweepMaxChanges *Count `json:"sweep_max_changes"`
+	DeleteAfter     string `json:"delete_after"`
+}
+
+// Count is a whole number, sent as a JSON number or as text holding one.
+type Count int
+
+// UnmarshalJSON reads 5 or "5".
+func (c *Count) UnmarshalJSON(b []byte) error {
+	var n int
+	if err := json.Unmarshal(b, &n); err == nil {
+		*c = Count(n)
+
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(b, &text); err != nil {
+		return fmt.Errorf("%w: %s is not a whole number", ErrInvalid, b)
+	}
+
+	n, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil {
+		return fmt.Errorf("%w: %q is not a whole number", ErrInvalid, text)
+	}
+
+	*c = Count(n)
+
+	return nil
 }
 
 // Values are the settings once checked.
@@ -72,6 +116,14 @@ type Values struct {
 	PublicURL string
 	// Verify is where the membership facts are.
 	Verify verify.Config
+	// SweepInterval is how often every member is checked; zero is off.
+	SweepInterval time.Duration
+	// SweepMaxChanges is the most accounts turned off, and the most deleted,
+	// in any 24 hours; zero changes none and only reports.
+	SweepMaxChanges int
+	// DeleteAfter is how long an account stays lapsed before it is deleted;
+	// zero never deletes.
+	DeleteAfter time.Duration
 }
 
 // channelID is the shape of a Slack channel ID: C for a channel, G for an old
@@ -122,12 +174,52 @@ func Read(sent Sent) (Values, error) {
 		verifyConfig = mergeVerify(verifyConfig, *sent.Verify)
 	}
 
+	interval, err := duration("sweep_interval", sent.SweepInterval, DefaultSweepInterval, minSweepInterval,
+		"0 turns the sweep off, 24h is daily and 720h about monthly")
+	if err != nil {
+		return Values{}, err
+	}
+
+	deleteAfter, err := duration("delete_after", sent.DeleteAfter, DefaultDeleteAfter, minDeleteAfter,
+		"0 never deletes, and 2160h is 90 days")
+	if err != nil {
+		return Values{}, err
+	}
+
+	maxChanges := DefaultSweepMaxChanges
+	if sent.SweepMaxChanges != nil {
+		maxChanges = int(*sent.SweepMaxChanges)
+	}
+
+	if maxChanges < 0 || maxChanges > maxSweepChanges {
+		return Values{}, fmt.Errorf("%w: sweep_max_changes is %d, and it is 0 to %d. 0 changes nothing and only reports",
+			ErrInvalid, maxChanges, maxSweepChanges)
+	}
+
 	return Values{
 		SlackBotToken: sent.SlackBotToken, SlackAppToken: sent.SlackAppToken, StatusChannel: sent.StatusChannel,
 		AllowGuests: sent.AllowGuests, Cameras: sent.Cameras, IssueReasons: sent.IssueReasons,
 		ServerURL: sent.ServerURL, AdminUsername: sent.AdminUsername, AdminPassword: sent.AdminPassword,
 		PublicURL: strings.TrimRight(sent.PublicURL, "/"), Verify: verifyConfig,
+		SweepInterval: interval, SweepMaxChanges: maxChanges, DeleteAfter: deleteAfter,
 	}, nil
+}
+
+// duration reads a duration setting: empty is the default, 0 is allowed, and
+// anything else is at least least.
+func duration(key, text string, fallback, least time.Duration, hint string) (time.Duration, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fallback, nil
+	}
+
+	d, err := time.ParseDuration(text)
+	if err != nil || d < 0 || (d > 0 && d < least) {
+		return 0, fmt.Errorf("%w: %s is %q, and it is a duration of at least %s, such as 24h. %s",
+			ErrInvalid, key, text, least, hint)
+	}
+
+	return d, nil
 }
 
 // mergeVerify keeps a default for each key left empty.

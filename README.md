@@ -15,14 +15,19 @@ What it does, when finished:
 [`docs/design.md`](docs/design.md) is the design. [`docs/compat.md`](docs/compat.md)
 lists what the module relies on from the server, Slack and the Pi cameras.
 
-**Status: phase 2.** The module posts print starts and ends (with a camera still),
+**Status: phase 3.** The module posts print starts and ends (with a camera still),
 printers waiting for a person, and printers that drop off mid-print to #bots.
 - **For everyone:** `/prusaconnect help` and `bot`.
 - **In #bots:** `status`, `jobs` and `snap`.
 - **For denhac members:** `signup`, `password`, `whoami` and `link`.
-- **For admins:** `suspend`, `unsuspend` and `lookup`.
+- **For admins:** `suspend`, `unsuspend`, `lookup`, and `admin` and `unadmin`, which
+  make a member's own account an admin and take it back.
 
-The sweep that turns off former members comes in phase 3.
+A daily sweep (configurable) checks every member's page. Two failed checks at least 20 hours
+apart turn the account to viewer, and an account lapsed for 90 days is deleted. It
+changes at most 5 accounts of each kind a day, and believes no failures from a sweep
+in which nobody qualifies. `bot` shows what the last sweep did; the server's log has a
+line for every change.
 
 ## Building
 
@@ -88,6 +93,9 @@ the module runs idle and lists what is missing, in `/prusaconnect bot` and at `G
 | `verify` | where the membership facts are: `member_field` (default `Member`), `code_field` (`Member Code URL`), `member_url` (`https://denhac.org/member/`) and `authorization` (`3D Printer User`) |
 | `cameras` | optional: a printer's own Pi camera still address, by printer id, used before the server's camera and letting `snap` wait for a fresh picture: `{"<printer id>": "http://<Pi LAN address>:8555/v1/cameras/cam0/still"}`. LAN addresses only |
 | `issue_reasons` | the server's issue reasons that mean a printer needs a person (default `["awaiting_operator"]`) |
+| `sweep_interval` | how often every member's page is checked (default `24h`; `720h` is about monthly). `0` turns the sweep off |
+| `sweep_max_changes` | the most accounts the sweep turns off, and the most it deletes, in any 24 hours (default `5`). `0` changes nothing and only reports |
+| `delete_after` | how long an account stays off for a lapsed membership before it is deleted (default `2160h`, 90 days). `0` never deletes |
 
 [`docs/slack-app.md`](docs/slack-app.md) says how to set up the Slack app and where
 each token comes from.

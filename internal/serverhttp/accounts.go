@@ -16,8 +16,9 @@ import (
 
 // Accounts implements domain.Accounts over /api/v1/auth/accounts.
 //
-// It has no call that writes admin. Before it changes an account it reads it
-// again, and it refuses one that holds admin, or the bot's own.
+// Before it changes an account it reads it again. It refuses the bot's own
+// account always, and one that holds admin in every call but Unadmin. Only
+// MakeAdmin writes admin, and only on an account that is an operator now.
 type Accounts struct {
 	session *Session
 	bot     string
@@ -156,6 +157,46 @@ func (a *Accounts) SetRole(ctx context.Context, id, role string) error {
 		return err
 	}
 
+	return a.putRole(ctx, id, role)
+}
+
+// MakeAdmin gives an operator account the admin role. It is the one call that
+// writes admin, and it refuses an account that is not an operator now, as well
+// as the bot's own.
+func (a *Accounts) MakeAdmin(ctx context.Context, id string) error {
+	acct, err := a.read(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if strings.EqualFold(acct.Username, a.bot) || acct.Role != domain.RoleOperator {
+		return fmt.Errorf("serverhttp: the bot makes only an operator account an admin, and %s is %q", acct.Username, acct.Role)
+	}
+
+	return a.putRole(ctx, id, domain.RoleAdmin)
+}
+
+// Unadmin sets operator or viewer on an account that may hold admin, never
+// the bot's own. The account service calls it only for an account it made
+// admin.
+func (a *Accounts) Unadmin(ctx context.Context, id, role string) error {
+	if role != domain.RoleOperator && role != domain.RoleViewer {
+		return fmt.Errorf("serverhttp: the bot sets only operator or viewer, not %q", role)
+	}
+
+	acct, err := a.read(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if strings.EqualFold(acct.Username, a.bot) {
+		return domain.ErrAdminAccount
+	}
+
+	return a.putRole(ctx, id, role)
+}
+
+func (a *Accounts) putRole(ctx context.Context, id, role string) error {
 	body, err := json.Marshal(map[string]string{"role": role})
 	if err != nil {
 		return fmt.Errorf("serverhttp: %w", err)
@@ -197,29 +238,70 @@ func (a *Accounts) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// DirectGrants are the grants written on single printers for an account,
+// read from /api/v1/grants/subject/user:<id>/direct, as "relation on object".
+// An org role is not among them: it is written on the org.
+func (a *Accounts) DirectGrants(ctx context.Context, id string) ([]string, error) {
+	resp, err := a.session.Do(ctx, http.MethodGet,
+		"/api/v1/grants/subject/"+url.PathEscape("user:"+id)+"/direct", nil, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, refusal("read grants", resp)
+	}
+
+	var list struct {
+		Items []struct {
+			Object   string `json:"object"`
+			Relation string `json:"relation"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&list); err != nil {
+		return nil, fmt.Errorf("serverhttp: the grants: %w", err)
+	}
+
+	out := make([]string, 0, len(list.Items))
+	for _, g := range list.Items {
+		out = append(out, g.Relation+" on "+g.Object)
+	}
+
+	return out, nil
+}
+
 var errGone = errors.New("serverhttp: no account has that id")
 
 // guard reads the account again, and refuses one that holds admin or is the
 // bot's own.
 func (a *Accounts) guard(ctx context.Context, id string) error {
-	accounts, err := a.List(ctx)
+	x, err := a.read(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	for _, x := range accounts {
-		if x.ID != id {
-			continue
-		}
-
-		if x.Role == domain.RoleAdmin || strings.EqualFold(x.Username, a.bot) {
-			return domain.ErrAdminAccount
-		}
-
-		return nil
+	if x.Role == domain.RoleAdmin || strings.EqualFold(x.Username, a.bot) {
+		return domain.ErrAdminAccount
 	}
 
-	return errGone
+	return nil
+}
+
+// read is one account as the server holds it now.
+func (a *Accounts) read(ctx context.Context, id string) (domain.Account, error) {
+	accounts, err := a.List(ctx)
+	if err != nil {
+		return domain.Account{}, err
+	}
+
+	for _, x := range accounts {
+		if x.ID == id {
+			return x, nil
+		}
+	}
+
+	return domain.Account{}, errGone
 }
 
 // refusal is a non-success answer as an error: the status and the problem

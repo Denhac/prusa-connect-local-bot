@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "prusa-connect-local-bot",
-    "version": "0.3.2",
+    "version": "0.5.0",
     "description": "The routes of the Slack module. Every path is relative to the mount the host assigns, /api/v1/modules/<namespace>, and the host serves this document rebased under it at <mount>/openapi.json."
   },
   "paths": {
@@ -10,7 +10,7 @@
       "get": {
         "operationId": "get-status",
         "summary": "How the module is doing",
-        "description": "The module's version and SDK version, when it started, the state of its Slack connection and of its status messages, and the settings it still needs. It never carries a token. The host takes view_resource on the module's instance before this is called.",
+        "description": "The module's version and SDK version, when it started, the state of its Slack connection, of its status messages, of its account features and of the membership sweep, and the settings it still needs. It never carries a token. The host takes view_resource on the module's instance before this is called.",
         "responses": {
           "200": {
             "description": "The module's health.",
@@ -87,6 +87,14 @@
                       "required": [
                         "running"
                       ]
+                    },
+                    "accounts": {
+                      "type": "string",
+                      "description": "on, or off and why: the account features need admin_password and the state file."
+                    },
+                    "sweep": {
+                      "type": "string",
+                      "description": "What the membership sweep last did and when the next full sweep is, while account features are on."
                     }
                   },
                   "required": [

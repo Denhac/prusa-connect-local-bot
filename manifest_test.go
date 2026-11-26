@@ -94,6 +94,8 @@ func TestOptionsMatchSettings(t *testing.T) {
 			read[key] = "object"
 		case reflect.TypeFor[[]string]():
 			read[key] = "list"
+		case reflect.TypeFor[*settings.Count]():
+			read[key] = "int"
 		default:
 			read[key] = field.Type.String()
 		}

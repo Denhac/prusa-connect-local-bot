@@ -42,7 +42,7 @@ import (
 // version is the manifest's version: manifest_test.go holds them together.
 const (
 	Name    = "slack-bot"
-	Version = extension.Version("0.3.2")
+	Version = extension.Version("0.5.0")
 )
 
 // Namespace is where the server mounts the module's routes: the module path
@@ -286,7 +286,10 @@ func (m *module) configure(ctx context.Context, sent settings.Sent, grants wirer
 	}
 
 	if accounts != nil {
-		wg.Go(func() { accounts.Recover(background) })
+		wg.Go(func() {
+			accounts.Recover(background)
+			accounts.RunSweeps(background)
+		})
 	}
 
 	go func() {
@@ -328,6 +331,9 @@ func (m *module) newAccounts(
 		Verifier: verifier, Accounts: serverhttp.NewAccounts(session, values.AdminUsername),
 		Access: m.access, Directory: profiles, BotAccount: values.AdminUsername, LinkURL: link,
 		Now: m.now, Save: state.SaveAccounts, Log: m.log,
+		Sweep: domain.SweepConfig{
+			Interval: values.SweepInterval, MaxChanges: values.SweepMaxChanges, DeleteAfter: values.DeleteAfter,
+		},
 	}, saved.Accounts), nil
 }
 
@@ -390,6 +396,8 @@ func (m *module) health() domain.Health {
 	h.Accounts = "on"
 	if m.accounts == nil {
 		h.Accounts = "off: " + m.accountsOff
+	} else {
+		h.Sweep = m.accounts.SweepStatus()
 	}
 
 	if m.configured {

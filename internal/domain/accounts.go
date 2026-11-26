@@ -16,7 +16,7 @@ import (
 )
 
 // This file is the account service (docs/design.md, "Accounts"): signup,
-// password, whoami, link, suspend, unsuspend and lookup. One lock makes it
+// password, whoami, link, suspend, unsuspend, lookup, admin and unadmin. One lock makes it
 // the only writer of accounts. Each change is written to the journal before
 // it reaches the server and finished on the next start if a crash cut it short.
 
@@ -42,6 +42,8 @@ type AccountsConfig struct {
 	// Save writes the state; it is called with the lock held.
 	Save func(MembersState) error
 	Log  *slog.Logger
+	// Sweep is how the membership sweep runs.
+	Sweep SweepConfig
 }
 
 // AccountsService is the account half of the bot.
@@ -57,6 +59,9 @@ type AccountsService struct {
 	codes   map[string]*linkCode
 	tries   map[string]int
 	confirm map[string]confirmation
+
+	lastSweep *SweepResult // the last pass, for SweepStatus
+	lastFull  time.Time    // when the last full pass began
 }
 
 type linkAsk struct {
@@ -95,7 +100,8 @@ func NewAccountsService(cfg AccountsConfig, st MembersState) *AccountsService {
 	return &AccountsService{
 		cfg: cfg, log: cfg.Log.With("component", "audit"), st: st,
 		asks: map[string]linkAsk{}, codes: map[string]*linkCode{}, tries: map[string]int{},
-		confirm: map[string]confirmation{},
+		confirm:   map[string]confirmation{},
+		lastSweep: st.Sweep.Result, lastFull: st.Sweep.Last,
 	}
 }
 
@@ -285,6 +291,11 @@ func (s *AccountsService) Signup(ctx context.Context, r Request, ui UI) {
 		switch {
 		case acct == nil:
 			delete(s.st.Members, m.Code) // the account is gone; start again
+		case acct.Role == RoleAdmin && !rec.Elevated.IsZero() && rec.Slack == r.User:
+			w := window("Sign up", "You already have the account "+acct.Username+", and it is an admin account.")
+			show(ctx, ui, id, w, plainOf(w))
+
+			return
 		case acct.Role == RoleAdmin:
 			w := window("Sign up", "Your account "+acct.Username+" is an admin account, which is managed by hand.")
 			show(ctx, ui, id, w, plainOf(w))
@@ -339,7 +350,7 @@ func (s *AccountsService) again(ctx context.Context, rec *MemberRecord, acct *Ac
 		return window("Sign up", "The bot could not turn your account back on. Try again later.")
 	}
 
-	rec.Lapsed = time.Time{}
+	rec.turnedOn(s.cfg.Now())
 	s.save()
 	s.log.Info("account turned back on", "account", acct.Username, "slack", rec.Slack)
 
@@ -430,7 +441,7 @@ func (s *AccountsService) create(ctx context.Context, ui UI, id string, r Reques
 
 	s.st.Members[m.Code] = &MemberRecord{
 		Slack: r.User, AccountID: acct.ID, Username: acct.Username, Via: "created",
-		BasedOn: m.DisplayName, Since: s.cfg.Now(),
+		BasedOn: m.DisplayName, Since: s.cfg.Now(), Qualified: s.cfg.Now(),
 	}
 	s.count(r.User)
 	s.save()
@@ -571,7 +582,8 @@ func (s *AccountsService) Password(ctx context.Context, r Request, ui UI) {
 
 		return
 	case acct.Role == RoleAdmin:
-		w := window("New password", "Your account is an admin account, which is managed by hand.")
+		w := window("New password", "Your account is an admin account, and the bot never sets an admin's password.",
+			"Change it in the printer server's web app, signed in as "+acct.Username+".")
 		show(ctx, ui, id, w, plainOf(w))
 
 		return
@@ -585,7 +597,7 @@ func (s *AccountsService) Password(ctx context.Context, r Request, ui UI) {
 			return
 		}
 
-		rec.Lapsed = time.Time{}
+		rec.turnedOn(s.cfg.Now())
 	}
 
 	password, err := newPassword()
@@ -653,6 +665,8 @@ func (s *AccountsService) WhoAmI(ctx context.Context, r Request) Message {
 			state = "suspended by an admin"
 		case !rec.Lapsed.IsZero():
 			state = "off since " + clock(rec.Lapsed, s.cfg.Now()) + ": membership lapsed"
+		case !rec.Elevated.IsZero():
+			state = "on, an admin"
 		}
 
 		msg.Fields = append(msg.Fields, Field{Label: "Account", Value: rec.Username + " (" + state + ")"})
@@ -832,7 +846,7 @@ func (s *AccountsService) link(ctx context.Context, slack string, lc *linkCode) 
 	s.begin(JournalEntry{Op: opClaim, Code: m.Code, Slack: slack, AccountID: acct.ID})
 	s.st.Members[m.Code] = &MemberRecord{
 		Slack: slack, AccountID: acct.ID, Username: acct.Username, Via: "claimed",
-		BasedOn: m.DisplayName, Since: s.cfg.Now(),
+		BasedOn: m.DisplayName, Since: s.cfg.Now(), Qualified: s.cfg.Now(),
 	}
 	s.save()
 
@@ -999,7 +1013,7 @@ func (s *AccountsService) SuspendConfirm(ctx context.Context, it Interaction, ui
 	if rec := s.st.Members[c.code]; rec != nil {
 		name = rec.Username
 
-		if err := s.cfg.Accounts.SetRole(ctx, rec.AccountID, RoleViewer); err != nil && !errors.Is(err, ErrAdminAccount) {
+		if err := s.setViewer(ctx, rec); err != nil && !errors.Is(err, ErrAdminAccount) {
 			s.log.Warn("suspend: could not set viewer; the journal keeps trying", "account", rec.Username, "error", err)
 			_ = ui.Respond(ctx, say("Suspended "+name+", but the bot could not change the account yet. It will try again."))
 
@@ -1061,11 +1075,10 @@ func (s *AccountsService) UnsuspendConfirm(ctx context.Context, it Interaction, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.st.Suspensions, c.code)
-	s.save()
-
 	rec := s.st.Members[c.code]
 	if rec == nil {
+		delete(s.st.Suspensions, c.code)
+		s.save()
 		s.log.Info("suspension lifted", "by", it.User, "member", c.code)
 		_ = ui.Respond(ctx, say("Lifted. That member has no account now; they can sign up again."))
 
@@ -1074,13 +1087,17 @@ func (s *AccountsService) UnsuspendConfirm(ctx context.Context, it Interaction, 
 
 	m, err := s.cfg.Verifier.CheckCode(ctx, c.code)
 	if err == nil && m.Qualifies {
+		// The suspension goes only once the account is on again, so that an
+		// account left a viewer is never taken for one demoted by hand.
 		if err := s.cfg.Accounts.SetRole(ctx, rec.AccountID, RoleOperator); err != nil {
-			_ = ui.Respond(ctx, say("Lifted, but the bot could not turn "+rec.Username+" back on. "+SlashCommand+" signup will."))
+			s.log.Warn("unsuspend: could not set operator; the suspension stays", "account", rec.Username, "error", err)
+			_ = ui.Respond(ctx, say("The bot could not turn "+rec.Username+" back on, so the suspension stays. Try again later."))
 
 			return
 		}
 
-		rec.Lapsed = time.Time{}
+		delete(s.st.Suspensions, c.code)
+		rec.turnedOn(s.cfg.Now())
 		s.save()
 		s.log.Info("suspension lifted", "by", it.User, "member", rec.Username)
 		_ = ui.Respond(ctx, say("Lifted. "+rec.Username+" is an operator again."))
@@ -1088,13 +1105,21 @@ func (s *AccountsService) UnsuspendConfirm(ctx context.Context, it Interaction, 
 		return
 	}
 
+	delete(s.st.Suspensions, c.code)
+
 	if rec.Lapsed.IsZero() {
 		rec.Lapsed = s.cfg.Now()
 	}
 
 	s.save()
-	s.log.Info("suspension lifted; membership does not qualify", "by", it.User, "member", rec.Username)
-	_ = ui.Respond(ctx, say("Lifted. "+rec.Username+" stays a viewer: their membership does not qualify now."))
+
+	why := "their membership does not qualify now"
+	if err != nil {
+		why = "the bot cannot check their membership right now. " + SlashCommand + " signup turns it on once they qualify"
+	}
+
+	s.log.Info("suspension lifted; the account stays a viewer", "by", it.User, "member", rec.Username, "why", why)
+	_ = ui.Respond(ctx, say("Lifted. "+rec.Username+" stays a viewer: "+why+"."))
 }
 
 func (s *AccountsService) takeConfirm(it Interaction, op string) (confirmation, bool) {
@@ -1166,18 +1191,42 @@ func (s *AccountsService) Lookup(ctx context.Context, r Request, args []string) 
 			account += " (gone from the server)"
 		}
 
+		now := s.cfg.Now()
+
 		state := "on"
 		if !rec.Lapsed.IsZero() {
-			state = "lapsed since " + clock(rec.Lapsed, s.cfg.Now())
+			state = "lapsed since " + clock(rec.Lapsed, now)
+
+			if after := s.cfg.Sweep.DeleteAfter; after > 0 {
+				from := rec.Lapsed
+				if rec.Qualified.After(from) {
+					from = rec.Qualified
+				}
+
+				state += "; deleted from " + from.Add(after).Local().Format("2 Jan 2006") + " if they do not qualify again"
+			}
+		}
+
+		check := "not yet checked by the sweep"
+		if !rec.Checked.IsZero() {
+			check = clock(rec.Checked, now) + ": " + rec.Check
+			if len(rec.FailedChecks) > 0 {
+				check += " (failing since " + clock(rec.FailedChecks[0], now) + ")"
+			}
 		}
 
 		msg.Fields = append(msg.Fields,
 			Field{Label: "Slack user", Value: slackName},
 			Field{Label: "Account", Value: account},
 			Field{Label: "State", Value: state},
-			Field{Label: "Arrived", Value: rec.Via + " " + clock(rec.Since, s.cfg.Now())},
+			Field{Label: "Arrived", Value: rec.Via + " " + clock(rec.Since, now)},
 			Field{Label: "Based on", Value: rec.BasedOn},
+			Field{Label: "Last check", Value: check},
 		)
+
+		if !rec.Elevated.IsZero() {
+			msg.Fields = append(msg.Fields, Field{Label: "Admin", Value: "made an admin by <@" + rec.ElevatedBy + "> " + clock(rec.Elevated, now)})
+		}
 	}
 
 	if sus != nil {
@@ -1205,8 +1254,18 @@ func (s *AccountsService) Recover(ctx context.Context) {
 
 	accounts, err := s.cfg.Accounts.List(ctx)
 	if err != nil {
-		s.log.Warn("recover: cannot list accounts; trying at the next start", "error", err)
+		s.log.Warn("recover: cannot list accounts; the sweep tries again", "error", err)
 
+		return
+	}
+
+	s.recoverLocked(ctx, accounts)
+}
+
+// recoverLocked finishes the journal's entries, with the lock held. The sweep
+// calls it too, so an entry a failed call left open is tried again then.
+func (s *AccountsService) recoverLocked(ctx context.Context, accounts []Account) {
+	if len(s.st.Journal) == 0 {
 		return
 	}
 
@@ -1218,8 +1277,10 @@ func (s *AccountsService) Recover(ctx context.Context) {
 			s.recoverSignup(ctx, e, accounts)
 		case opSuspend:
 			if rec := s.st.Members[e.Code]; rec != nil {
-				_ = s.cfg.Accounts.SetRole(ctx, rec.AccountID, RoleViewer) // an admin account refuses; nothing to do then
+				_ = s.setViewer(ctx, rec) // an admin account made by hand refuses; nothing to do then
 			}
+		case opElevate:
+			s.recoverElevate(e, accounts)
 		case opClaim:
 			if rec := s.st.Members[e.Code]; rec != nil {
 				if _, suspended := s.st.Suspensions[e.Code]; !suspended {
@@ -1271,4 +1332,260 @@ func (s *AccountsService) recoverSignup(ctx context.Context, e *JournalEntry, ac
 	}
 
 	s.log.Warn("recover: a signup cut short left no account to adopt", "username", e.Username)
+}
+
+// recoverElevate finishes an admin command cut short: an account the server
+// now holds as admin is marked as made admin by the bot. One still an operator
+// was never changed.
+func (s *AccountsService) recoverElevate(e *JournalEntry, accounts []Account) {
+	rec := s.st.Members[e.Code]
+	if rec == nil || rec.AccountID != e.AccountID {
+		return
+	}
+
+	if acct := find(accounts, e.AccountID); acct != nil && acct.Role == RoleAdmin && rec.Elevated.IsZero() {
+		s.elevated(rec, acct, e.Slack)
+		s.log.Info("recover: an admin command cut short was finished", "member", rec.Username, "by", e.Slack)
+	}
+}
+
+// ----- admin and unadmin ---------------------------------------------------
+
+// setViewer turns a member's account off. One the bot made admin loses admin
+// through Unadmin and is no longer elevated; turning it on again makes it an
+// operator, and only the admin command makes it an admin again.
+func (s *AccountsService) setViewer(ctx context.Context, rec *MemberRecord) error {
+	if rec.Elevated.IsZero() {
+		return s.cfg.Accounts.SetRole(ctx, rec.AccountID, RoleViewer) //nolint:wrapcheck // the port's own error.
+	}
+
+	if err := s.cfg.Accounts.Unadmin(ctx, rec.AccountID, RoleViewer); err != nil {
+		return err //nolint:wrapcheck // the port's own error.
+	}
+
+	s.unelevated(rec)
+
+	return nil
+}
+
+// elevated marks a record as made admin by the bot, and links its Slack user
+// as an admin unless they are linked to an admin account already.
+func (s *AccountsService) elevated(rec *MemberRecord, acct *Account, by string) {
+	rec.Elevated, rec.ElevatedBy = s.cfg.Now(), by
+
+	if s.st.Admins[rec.Slack] == nil {
+		s.st.Admins[rec.Slack] = &AdminLink{Subject: acct.Subject(), Username: acct.Username, Linked: s.cfg.Now()}
+	}
+}
+
+// unelevated ends what elevated began, and the admin link only if it is to
+// this account.
+func (s *AccountsService) unelevated(rec *MemberRecord) {
+	rec.Elevated, rec.ElevatedBy = time.Time{}, ""
+
+	if l := s.st.Admins[rec.Slack]; l != nil && l.Subject == "user:"+rec.AccountID {
+		delete(s.st.Admins, rec.Slack)
+	}
+}
+
+// MakeAdmin asks an admin to confirm making a member's account an admin.
+func (s *AccountsService) MakeAdmin(ctx context.Context, r Request, args []string) Message {
+	if refusal, ok := s.admin(ctx, r.User); !ok {
+		return refusal
+	}
+
+	if len(args) == 0 {
+		return say("Make whom an admin? " + SlashCommand + " admin <@user|username|member code>")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	code, _ := s.resolve(args[0])
+
+	rec := s.st.Members[code]
+	if refusal, ok := s.mayElevate(args[0], code, rec); !ok {
+		return refusal
+	}
+
+	token := randomToken(16)
+
+	s.pending.Lock()
+	s.confirm[token] = confirmation{op: "admin", code: code, admin: r.User, expires: s.cfg.Now().Add(confirmFor)}
+	s.pending.Unlock()
+
+	return Message{
+		Lines: []string{
+			"Make " + rec.Username + " an admin? An admin has full control of the printer server: every account, " +
+				"printer and setting. " + SlashCommand + " unadmin takes it back.",
+		},
+		Buttons: []Button{{Action: "admin-confirm", Value: token, Label: "Make admin", Danger: true}},
+	}
+}
+
+// mayElevate refuses a member whose account the admin command cannot take.
+func (s *AccountsService) mayElevate(who, code string, rec *MemberRecord) (Message, bool) {
+	_, suspended := s.st.Suspensions[code]
+
+	switch {
+	case rec == nil:
+		return say(who + " has no account the bot looks after. They run " + SlashCommand + " signup first, or " +
+			SlashCommand + " link to claim one."), false
+	case suspended:
+		return say(rec.Username + " is suspended. Lift the suspension first."), false
+	case !rec.Lapsed.IsZero():
+		return say(rec.Username + " is off: their membership lapsed."), false
+	case !rec.Elevated.IsZero():
+		return say(rec.Username + " is an admin already. " + SlashCommand + " unadmin takes it back."), false
+	}
+
+	return Message{}, true
+}
+
+// MakeAdminConfirm is the click on "Make admin".
+func (s *AccountsService) MakeAdminConfirm(ctx context.Context, it Interaction, ui UI) {
+	c, ok := s.takeConfirm(it, "admin")
+	if !ok {
+		_ = ui.Respond(ctx, say("That request has expired. Run it again."))
+
+		return
+	}
+
+	if refusal, ok := s.admin(ctx, it.User); !ok {
+		_ = ui.Respond(ctx, refusal)
+
+		return
+	}
+
+	m, err := s.cfg.Verifier.CheckCode(ctx, c.code)
+
+	switch {
+	case err != nil:
+		_ = ui.Respond(ctx, say("The bot cannot check that membership right now, so it made nobody an admin. Try again later."))
+
+		return
+	case !m.Qualifies:
+		_ = ui.Respond(ctx, say("That member does not qualify now, so the bot made nobody an admin. "+m.Reason))
+
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec := s.st.Members[c.code]
+	if refusal, ok := s.mayElevate(c.code, c.code, rec); !ok {
+		_ = ui.Respond(ctx, refusal)
+
+		return
+	}
+
+	accounts, err := s.cfg.Accounts.List(ctx)
+	acct := find(accounts, rec.AccountID)
+
+	switch {
+	case err != nil:
+		_ = ui.Respond(ctx, say("The bot cannot reach the printer server right now. Try again later."))
+
+		return
+	case acct == nil:
+		_ = ui.Respond(ctx, say(rec.Username+"'s account is gone from the printer server."))
+
+		return
+	case acct.Role != RoleOperator:
+		_ = ui.Respond(ctx, say(rec.Username+" is "+acct.Role+" on the printer server, so the bot leaves it alone."))
+
+		return
+	}
+
+	s.begin(JournalEntry{Op: opElevate, Code: c.code, Slack: it.User, AccountID: acct.ID})
+
+	if err := s.cfg.Accounts.MakeAdmin(ctx, acct.ID); err != nil {
+		s.log.Warn("admin: the server refused", "member", rec.Username, "error", err)
+		_ = ui.Respond(ctx, say("The printer server refused to make "+rec.Username+" an admin. Try again later."))
+
+		return // the journal entry stays; the next sweep reads what the server holds
+	}
+
+	s.elevated(rec, acct, it.User)
+	s.end(opElevate, c.code)
+	s.save()
+	s.log.Info("made admin", "by", it.User, "member", rec.Username, "slack", rec.Slack)
+	_ = ui.Respond(ctx, say(rec.Username+" is an admin now. Their Slack user can use the admin commands."))
+}
+
+// Unadmin asks an admin to confirm taking admin from an account the bot made
+// admin.
+func (s *AccountsService) Unadmin(ctx context.Context, r Request, args []string) Message {
+	if refusal, ok := s.admin(ctx, r.User); !ok {
+		return refusal
+	}
+
+	if len(args) == 0 {
+		return say("Take admin from whom? " + SlashCommand + " unadmin <@user|username|member code>")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	code, _ := s.resolve(args[0])
+
+	rec := s.st.Members[code]
+	if rec == nil || rec.Elevated.IsZero() {
+		return say(args[0] + " is not an admin the bot made. An admin made by hand is changed in the web app.")
+	}
+
+	token := randomToken(16)
+
+	s.pending.Lock()
+	s.confirm[token] = confirmation{op: "unadmin", code: code, admin: r.User, expires: s.cfg.Now().Add(confirmFor)}
+	s.pending.Unlock()
+
+	line := "Take admin from " + rec.Username + "? The account becomes an operator."
+	if rec.Slack == r.User {
+		line += " That is your own account: you lose the admin commands unless you are linked to another admin account."
+	}
+
+	return Message{
+		Lines:   []string{line},
+		Buttons: []Button{{Action: "unadmin-confirm", Value: token, Label: "Take admin away", Danger: true}},
+	}
+}
+
+// UnadminConfirm is the click on "Take admin away".
+func (s *AccountsService) UnadminConfirm(ctx context.Context, it Interaction, ui UI) {
+	c, ok := s.takeConfirm(it, "unadmin")
+	if !ok {
+		_ = ui.Respond(ctx, say("That request has expired. Run it again."))
+
+		return
+	}
+
+	if refusal, ok := s.admin(ctx, it.User); !ok {
+		_ = ui.Respond(ctx, refusal)
+
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec := s.st.Members[c.code]
+	if rec == nil || rec.Elevated.IsZero() {
+		_ = ui.Respond(ctx, say("That account is not an admin the bot made any more."))
+
+		return
+	}
+
+	if err := s.cfg.Accounts.Unadmin(ctx, rec.AccountID, RoleOperator); err != nil {
+		s.log.Warn("unadmin: the server refused", "member", rec.Username, "error", err)
+		_ = ui.Respond(ctx, say("The printer server refused to change "+rec.Username+". Try again later."))
+
+		return
+	}
+
+	s.unelevated(rec)
+	s.save()
+	s.log.Info("admin taken away", "by", it.User, "member", rec.Username)
+	_ = ui.Respond(ctx, say(rec.Username+" is an operator again."))
 }

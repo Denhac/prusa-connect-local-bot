@@ -11,9 +11,13 @@ import (
 )
 
 // fakeVerifier answers from fixed memberships by Slack user and by code.
+// byCode and codeErr are what the sweep reads, ahead of bySlack.
 type fakeVerifier struct {
 	bySlack map[string]Membership
 	err     error
+	byCode  map[string]Membership
+	codeErr error
+	reads   int
 }
 
 func (v *fakeVerifier) Check(_ context.Context, slack string) (Membership, error) {
@@ -29,6 +33,16 @@ func (v *fakeVerifier) Check(_ context.Context, slack string) (Membership, error
 }
 
 func (v *fakeVerifier) CheckCode(_ context.Context, code string) (Membership, error) {
+	v.reads++
+
+	if v.codeErr != nil {
+		return Membership{}, v.codeErr
+	}
+
+	if m, ok := v.byCode[code]; ok {
+		return m, nil
+	}
+
 	for _, m := range v.bySlack {
 		if m.Code == code {
 			return m, nil
@@ -44,10 +58,22 @@ type fakeAccounts struct {
 	next      int
 	passwords map[string]string
 	createErr error
+	listErr   error
+	roleErr   error
+	grants    map[string][]string
+	deletes   []string
 }
 
 func (a *fakeAccounts) List(context.Context) ([]Account, error) {
+	if a.listErr != nil {
+		return nil, a.listErr
+	}
+
 	return append([]Account(nil), a.list...), nil
+}
+
+func (a *fakeAccounts) DirectGrants(_ context.Context, id string) ([]string, error) {
+	return a.grants[id], nil
 }
 
 func (a *fakeAccounts) Create(_ context.Context, username, display, password string) (Account, error) {
@@ -85,10 +111,43 @@ func (a *fakeAccounts) SetRole(_ context.Context, id, role string) error {
 	acct := a.get(id)
 
 	switch {
+	case a.roleErr != nil:
+		return a.roleErr
 	case acct == nil:
 		return errors.New("no such account")
 	case acct.Role == RoleAdmin:
 		return ErrAdminAccount
+	}
+
+	acct.Role = role
+
+	return nil
+}
+
+// MakeAdmin and Unadmin hold to what internal/serverhttp holds to.
+func (a *fakeAccounts) MakeAdmin(_ context.Context, id string) error {
+	acct := a.get(id)
+
+	switch {
+	case a.roleErr != nil:
+		return a.roleErr
+	case acct == nil || acct.Role != RoleOperator || acct.Username == "slackbot":
+		return errors.New("not an operator account")
+	}
+
+	acct.Role = RoleAdmin
+
+	return nil
+}
+
+func (a *fakeAccounts) Unadmin(_ context.Context, id, role string) error {
+	acct := a.get(id)
+
+	switch {
+	case a.roleErr != nil:
+		return a.roleErr
+	case acct == nil || acct.Username == "slackbot" || role == RoleAdmin:
+		return errors.New("refused")
 	}
 
 	acct.Role = role
@@ -104,6 +163,7 @@ func (a *fakeAccounts) Delete(_ context.Context, id string) error {
 			}
 
 			a.list = append(a.list[:i], a.list[i+1:]...)
+			a.deletes = append(a.deletes, id)
 
 			return nil
 		}
@@ -128,7 +188,11 @@ type world struct {
 	verifier *fakeVerifier
 	saved    MembersState
 	saves    int
+	clock    time.Time
 }
+
+// at moves the world's clock to start+d.
+func (w *world) at(d time.Duration) { w.clock = start.Add(d) }
 
 func member(code, name string) Membership {
 	return Membership{Code: code, DisplayName: name, Qualifies: true, Authorizations: []string{"3D Printer User"}}
@@ -138,6 +202,7 @@ func newWorld(t *testing.T) *world {
 	t.Helper()
 
 	w := &world{
+		clock: start,
 		accounts: &fakeAccounts{passwords: map[string]string{}, list: []Account{
 			{ID: "admin1", Username: "boss", Role: RoleAdmin},
 			{ID: "bot", Username: "slackbot", Role: RoleAdmin},
@@ -151,9 +216,10 @@ func newWorld(t *testing.T) *world {
 	w.svc = NewAccountsService(AccountsConfig{
 		Verifier: w.verifier, Accounts: w.accounts, Access: fakeAccess{"user:admin1": true},
 		Directory: names{"U1": "example", "UADMIN": "Boss"}, BotAccount: "slackbot",
-		LinkURL: "https://printserver.example/api/v1/modules/x/link", Now: func() time.Time { return start },
-		Save: func(st MembersState) error { w.saved = st; w.saves++; return nil },
-		Log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LinkURL: "https://printserver.example/api/v1/modules/x/link", Now: func() time.Time { return w.clock },
+		Save:  func(st MembersState) error { w.saved = st; w.saves++; return nil },
+		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Sweep: DefaultSweepConfig(),
 	}, MembersState{})
 
 	return w

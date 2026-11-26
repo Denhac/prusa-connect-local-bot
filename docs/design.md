@@ -32,7 +32,10 @@ Licence: MIT (see "Licence").
   - Admins can **look up** who an account, a member code or a Slack user is.
   - Admins can **suspend** an account, and the suspension holds even while the person
     is still a member.
-  - Admin accounts themselves are managed by hand, and the bot never touches them.
+  - Admin accounts made by hand are managed by hand, and the bot never touches them.
+    Since 0.5.0 an admin can make a member's own account an admin with `admin`, and
+    only such an account can the bot take admin from (`unadmin`, a suspension, a
+    lapse).
 - Each outside system has exactly one package that knows it: prusa-connect, Slack,
   the Pi camera API and denhac.org.
 
@@ -227,13 +230,14 @@ Each was read in the source or checked live on 2026-11-25.
 | D7 | Account changes through the **HTTP auth API, signed in as a dedicated bot admin**. The password is a `secret` option, and the session travels as `Bearer` | The only credential the server accepts for these calls on beta.2. The exception to rule 6 stays in one package | Admin API token (refused by kind). Page session (refused) |
 | D8 | **denhac decides who qualifies**, behind `domain.Verifier`, in `internal/verify`. Checked at every signup and reset, and by the sweep | Site policy, which changes on its own schedule. One package knows the fields and the page | Checks spread through the command handlers |
 | D9 | **Turning an account off = set its role to `viewer`, and nothing else.** It is used for an admin's suspension and for a former member. The person can still sign in and look, but cannot operate. On a member account, `viewer` marks the account as off, on the server itself | The user's choice. No suspend call exists. The graph is read on every request, so live sessions and tokens lose operator rights at once. It is one server call, so it cannot be left half done. The account id, and with it the print history, survives | Also scrambling the password. Deleting at once. Withdrawing every role |
-| D10 | **Former members are found by a sweep**, by default daily. Two failed checks at least 20 h apart turn the account off. After 90 days off for that reason, it is deleted. At most `sweep_max_changes` changes of each kind per sweep | The user asked for a slow poll and the 90 days. Two observations ride out a denhac glitch. The per-sweep limit keeps a broken page from turning off everyone at once, with no audit channel needed to stop it | Real-time profile events. A cap that waits for an admin's confirmation |
+| D10 | **Former members are found by a sweep**, by default daily. Two failed checks at least 20 h apart turn the account off. After 90 days off for that reason, it is deleted. At most `sweep_max_changes` changes of each kind in any 24 h | The user asked for a slow poll and the 90 days. Two observations ride out a denhac glitch. The limit, and the breaker for a pass in which nobody qualifies, keep a broken page from turning off everyone at once, with no audit channel needed to stop it | Real-time profile events. A cap that waits for an admin's confirmation |
 | D11 | **One account writer.** Every change to an account goes through one goroutine, and is written to a journal before it starts and finished on restart | Commands, the sweep and admins can target the same account. A crash between writing a suspension and making the server call must not lose it | A lock per Slack user |
 | D12 | **Admins are recognised by the server.** An admin links once, and every admin action asks `access.check` | One source of truth | A list of Slack ids |
 | D13 | **Members only.** Printer status, jobs and stills answer only members and admins. They post into a channel only in #bots | #bots is the members' channel. #public is not | Anyone in the workspace |
 | D14 | **No audit channel.** Every account action is a log line (`component=audit`) in the server's journal. The person concerned and the admin who acted see the result in their answers | The user decided against an audit channel | An audit channel |
 | D15 | Camera stills from the **Pi camera API v1** | No camera read on the wire, and that API was built for this | Server periodic capture, which writes a file per interval with no retention |
 | D16 | State in **one JSON file in the data directory**, written atomically | Always present, small and readable | The record store, or a database |
+| D17 | **Admins can make a member's own account an admin** (0.5.0), confirmed with a button like `suspend`. The bot can take admin only from accounts it made admin, and turning such an account off ends the admin | The user asked for it (2026-11-25), and chose the member's own account, undo by the bot, and a button | A second admin account per person. A confirmation signed in on the server, which a hijacked Slack session cannot give |
 
 ## Architecture
 
@@ -293,8 +297,10 @@ type Accounts interface {       // internal/accounts. Ids only
     SetPassword(ctx, id string, pw Secret) error // a 5xx is retried
     SetRole(ctx, id string, role Role) error     // operator or viewer only
     Delete(ctx, id string) error
-    // No call can write admin. Each call re-reads the account and refuses one that
-    // holds admin.
+    MakeAdmin(ctx, id string) error              // an operator account only (0.5.0)
+    Unadmin(ctx, id string, role Role) error     // operator or viewer, on an admin the bot made
+    // Only MakeAdmin writes admin. Each call re-reads the account; every call but
+    // Unadmin refuses one that holds admin, and every call refuses the bot's own.
 }
 type Directory interface {      // internal/slack
     Profile(ctx, slackID string) (SlackProfile, error) // custom fields by label
@@ -334,7 +340,7 @@ One `errgroup`, cancelled by `plugin.shutdown`, SIGTERM or SIGINT.
 | poster | the single outbound queue, at about one message a second per channel |
 | commands | one goroutine per command, at most 8 at once, each with a timeout. Account work is handed to the writer |
 | account writer | **the only code that changes accounts.** It works through the journal one entry at a time |
-| sweep | every `sweep_interval`, it queues a check of each member |
+| sweep | looks every hour: a full pass every `sweep_interval`, rechecks, deletions. It reads the member pages without the writer's lock, then takes it to apply |
 
 **On shutdown:** flush the state file (it is written on every change anyway), close the
 Slack connection within at most 2 s, and return. All of it fits in the host's 5 s.
@@ -436,7 +442,7 @@ plus issue reason.
 
 | kind | how it is recognised | the bot may |
 |---|---|---|
-| **admin** | holds the `admin` role | read it, and recognise its owner through `link`. Never change it. Each change re-reads the role first |
+| **admin** | holds the `admin` role, and was made so by hand | read it, and recognise its owner through `link`. Never change it. Each change re-reads the role first |
 | **member** | created by the bot, or claimed through `link`, and recorded in the state file | everything below |
 | **drift** | anything else: a non-admin account the bot neither made nor had claimed | log it once a day, and never touch it |
 
@@ -450,6 +456,7 @@ id, the username, and how it arrived (`created` or `claimed`).
 | **on** | `operator` | `signup` or a claim. From lapsed, `signup` or `password` once the person qualifies again | lapsing, or an admin's `suspend` |
 | **lapsed** | `viewer` | the sweep: two failed checks at least 20 h apart | `signup` or `password` when the person qualifies again. **Deleted after 90 days** in this state |
 | **suspended** | `viewer` | an admin's `suspend` | only an admin's `unsuspend` |
+| **on, admin** | `admin` | an admin's `admin`, from **on** (0.5.0) | `unadmin` to **on**; `suspend` or lapsing to those states, which ends the admin |
 
 **Off is not locked out.**
 - A `viewer` can still sign in and see printers, cameras and stored files, but can
@@ -637,6 +644,34 @@ When the name belongs to no member, it says what the name is instead:
 - a suspension record without an account
 - or nothing at all
 
+### Making an admin (admin only, 0.5.0)
+
+`admin <@user|username|member code>` makes a member's own account an admin.
+- **Who:** a linked admin, checked with `access.check` at the command and again at
+  the click. The button belongs to the admin who asked, and expires in 10 minutes.
+- **Whom:** a member the bot looks after, whose account is an `operator` on the
+  server now, who is neither suspended nor lapsed, and whose member page qualifies
+  at the click. Never an admin made by hand, and never the bot's own account.
+- **Steps:** a journal entry, then the role `admin`, then the record marks it
+  `elevated` (when, and by which admin). The member's Slack user is linked as an
+  admin, unless it is linked to an admin account already, so the admin commands work
+  for them at once. On restart, an open entry is finished if the server holds the
+  account as admin, and dropped if not.
+- **It is a risk to weigh:** a hijacked Slack session of one admin can make others.
+  The user chose a button over a confirmation signed in on the server (2026-11-25).
+  Every one is an audit line.
+
+**Taking it back.**
+- `unadmin <who>`, confirmed with a button, sets the role `operator`, ends the
+  elevation, and removes the admin link it made. It refuses an admin made by hand.
+- **Turning the account off ends the admin.** `suspend`, a lapse and the sweep set
+  `viewer` through `Unadmin`. Turned on again, it is an `operator`; only `admin`
+  makes it an admin again.
+- **Taken away by hand:** the sweep sees an elevated account that no longer holds
+  admin, ends the elevation, and treats the role it found as usual.
+- An elevated admin's password is never set by the bot: `password` says to change it
+  in the web app.
+
 ### Suspension (admin only)
 
 **Why it exists:** an admin may turn an account off for a safety issue before a ban is
@@ -655,34 +690,65 @@ The admin's answer confirms each step. An audit line is logged.
 
 ### The sweep
 
-**When:** once every `sweep_interval` (default 24 h; `720h` for monthly). It never
-reacts to Slack, and it sends nobody a message.
+Built in 0.4.0 (`internal/domain/sweep.go`). It never reacts to Slack, and it sends
+nobody a message. Every change is a log line (`component=audit`), and `bot` and
+`GET /status` show what the last pass did.
 
-**For each member, by stored code:**
-- **Cannot tell** (an error) → nothing changes, and it is counted in `bot`.
-- **Qualifies** → any earlier failed check is cleared. A lapsed account is **not**
-  turned back on here, because that waits for the person's own `signup` or
-  `password`.
-- **Does not qualify** → recorded with its time.
-  - On the second such result at least 20 h after the first, the account is turned
-    **off** as lapsed (role `viewer`, through the writer).
-- **Lapsed for more than 90 days** (`delete_after`) → the account is deleted, and the
-  member record goes. A suspension record stays.
+**When.** The module looks an hour apart, starting a few minutes after it starts. A
+look does only what is due, so most looks do nothing:
+- **A full pass** every `sweep_interval` (default 24 h; `720h` for about monthly; `0`
+  turns the sweep off). It reads every member's page. The time of the last full pass
+  is in the state file, so a restart does not cause one.
+- **A recheck** of each member with one failed check, 20 h after that check, whatever
+  the interval. So with a monthly interval, a former member is still turned off a
+  day after the first failure, not a month.
+- **Deletions** that are due, and any journal entry a failed call left open.
 
-**Limits:** at most `sweep_max_changes` (default 5) accounts turned off, and at most
-5 deleted, per sweep. The rest wait for the next sweep, oldest first.
+**For each member read, by stored code:**
+- **Cannot tell** (an error: denhac down, or a page whose layout changed) → nothing
+  changes. It is counted in `bot`.
+- **Qualifies** → any failed check is cleared, and the time is kept as `qualified`. A
+  lapsed account is **not** turned back on here; that waits for the person's own
+  `signup` or `password`.
+- **Does not qualify** → the first and the latest failed check are kept.
+  - Once they are at least 20 h apart, the account is turned **off** as lapsed:
+    the record first, then the role `viewer`. If the call fails, the next pass sets
+    the role.
+- **Deleted** once lapsed for `delete_after` (default 90 days; `0` never deletes) and
+  not qualifying at any check for as long. A member who renews and never runs
+  `signup` keeps their viewer account. A suspension record stays.
+
+**Limits.**
+- At most `sweep_max_changes` (default 5) accounts turned off, and at most as many
+  deleted, in any 24 h. The rest wait, oldest first. `0` changes nothing and only
+  reports, for a first run on a new server.
+- **A breaker:** a full pass of 4 or more members in which nobody qualifies counts no
+  failure against anyone. That is a changed page or a renamed authorization, not a
+  wave of lapses, and the log says so.
 - A real wave of lapses drains over a few days.
-- A broken page, or a renamed authorization, turns off at most 5 accounts a day. The
-  log and `bot` show it.
 
-**The same sweep also:**
-- logs **drift**: non-admin accounts the bot does not hold, and hand-written grants on
-  single printers, read from `/api/v1/grants/subject/{subject}/direct`
-- handles **changes made by hand** on member accounts:
-  - promoted to `admin`: the account has left the bot's care. The record is dropped,
-    and it is logged
-  - demoted to `viewer` while on: recorded as an admin suspension
-  - restored to `operator` while lapsed or suspended: set back to `viewer`, and logged
+**A trusted account list.** Every pass that changes anything reads the account list
+first. It changes nothing if the list cannot be read, or does not hold the bot's own
+account.
+
+**The same full pass also:**
+- logs **drift**: non-admin accounts the bot does not hold. A person claims one with
+  `link`.
+- logs hand-written grants on single printers for member accounts, read from
+  `/api/v1/grants/subject/{subject}/direct`. It changes neither.
+- takes in **changes made by hand** on member accounts:
+  - deleted on the server: the record goes
+  - promoted to `admin`: the account has left the bot's care. The record goes
+  - demoted to `viewer` while on: kept as a suspension "by an admin on the server",
+    which `unsuspend` lifts
+
+**Every pass** sets back to `viewer` an account that is an `operator` while lapsed or
+suspended, whether restored by hand or left by a call that failed.
+
+**No journal for the sweep's own changes.** Each is written to the record before it
+reaches the server, and the next pass puts the account in step with the record. A
+member with an open journal entry (a signup, claim or suspension in progress) is
+left alone until it is finished.
 
 ### The bot's admin account, plainly
 
@@ -702,7 +768,10 @@ reacts to Slack, and it sends nobody a message.
   - Plain `http` to anything but loopback is refused, and so are Tailscale addresses
     and `*.ts.net`.
 - **This password is full control of the server.** So the bot limits itself:
-  - The `Accounts` port cannot write `admin`, and refuses any account that holds it.
+  - Only `MakeAdmin` writes `admin`, only on a member's operator account, and only
+    for a linked admin's confirmed `admin` command. Only `Unadmin` changes an
+    account that holds admin, and the service calls it only for one it made admin.
+    The bot never sets an admin's password, and never touches its own account.
   - Deletion happens only in the sweep, after 90 days lapsed.
   - Every change is journaled and logged, and the server logs every action of
     `slackbot`.
@@ -782,7 +851,7 @@ options:   # all optional: the module idles, reporting what is missing, until se
   - {key: verify, type: object, default: '{"member_field":"Member","code_field":"Member Code URL","member_url":"https://denhac.org/member/"}', summary: "Where the membership facts are"}
   - {key: access_rules, type: list, default: '[{"authorization":"3D Printer User","grant":"org:operator"}]', summary: "Which authorization gives which access"}
   - {key: sweep_interval, type: duration, default: "24h", summary: "How often every member is checked"}
-  - {key: sweep_max_changes, type: int, default: "5", summary: "Most accounts turned off, and most deleted, in one sweep"}
+  - {key: sweep_max_changes, type: int, default: "5", summary: "Most accounts turned off, and most deleted, in any 24 hours"}
   - {key: delete_after, type: duration, default: "2160h", summary: "How long an account stays lapsed before it is deleted (90 days)"}
   - {key: cameras, type: object, default: "{}", summary: "Printer id to Pi camera still address"}
   - {key: notify, type: object, default: "{}", summary: "Per signal: on/off; issue_reasons"}
@@ -871,7 +940,7 @@ as `[redacted]`, and a test checks this.
 | A non-member reads printer status or stills | read commands answer members only, and post only in #bots |
 | Someone claims membership they lack | denhac's software sets the fields, not the member. The bot reads them from Slack, builds the URL itself, and reads denhac's own page. One code belongs to one Slack user |
 | A taken-over Slack account of a member | it can reset only its own member account, at most 3 times a day, and every reset is logged. Never an admin account |
-| A broken denhac page or a Slack outage | "cannot tell" never turns anyone off. Turning off needs two failed checks 20 h apart, and at most 5 accounts per sweep |
+| A broken denhac page or a Slack outage | "cannot tell" never turns anyone off. Turning off needs two failed checks 20 h apart, at most 5 accounts in any 24 h, and a full pass in which somebody qualifies |
 | A fake admin | admin actions need a link made through a Connect sign-in, and a check with the server every time |
 | Member codes and Slack identities seen by the wrong person | only `lookup` shows them, only to a confirmed admin, only ephemerally; every lookup is logged |
 | Phishing a link code | a nonce binds it to one Slack user, both sides name whom it links, wrong tries are limited, and it expires in 10 min |

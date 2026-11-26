@@ -55,8 +55,8 @@ var ErrNameTaken = errors.New("the username is taken")
 var ErrAdminAccount = errors.New("the bot never changes an account that holds admin")
 
 // Accounts is the server's accounts, signed in as the bot. internal/serverhttp
-// implements it. It has no call that can write admin, and refuses to change
-// an account that holds admin.
+// implements it. Every call but MakeAdmin and Unadmin refuses an account that
+// holds admin, and every call refuses the bot's own account.
 type Accounts interface {
 	List(ctx context.Context) ([]Account, error)
 	// Create makes an operator account.
@@ -65,6 +65,15 @@ type Accounts interface {
 	// SetRole sets operator or viewer.
 	SetRole(ctx context.Context, id, role string) error
 	Delete(ctx context.Context, id string) error
+	// DirectGrants are the grants written by hand on single printers for an
+	// account, as "relation on object". The sweep only reports them.
+	DirectGrants(ctx context.Context, id string) ([]string, error)
+	// MakeAdmin gives an operator account the admin role. It is the one call
+	// that writes admin, and it refuses an account that is not an operator.
+	MakeAdmin(ctx context.Context, id string) error
+	// Unadmin sets operator or viewer on an account that may hold admin. The
+	// service calls it only for an account it made admin.
+	Unadmin(ctx context.Context, id, role string) error
 }
 
 // Access asks the server who may do what. internal/connect implements it.
@@ -91,6 +100,8 @@ type MembersState struct {
 	Journal []*JournalEntry `json:"journal,omitempty"`
 	// Limits are the times of each chat user's signups and resets.
 	Limits map[string][]time.Time `json:"limits,omitempty"`
+	// Sweep is where the membership sweep stands.
+	Sweep SweepState `json:"sweep,omitzero"`
 }
 
 // MemberRecord is one member's account.
@@ -102,8 +113,28 @@ type MemberRecord struct {
 	BasedOn   string    `json:"based_on,omitempty"`
 	Since     time.Time `json:"since"`
 	// Lapsed is when the account was turned off for no longer qualifying.
-	Lapsed       time.Time   `json:"lapsed,omitzero"`
+	Lapsed time.Time `json:"lapsed,omitzero"`
+	// FailedChecks are the first and the latest of the checks in a row that
+	// said the member does not qualify. Any check that qualifies clears them.
 	FailedChecks []time.Time `json:"failed_checks,omitempty"`
+	// Checked is when the sweep last read the member page, and Check what it
+	// found, for lookup.
+	Checked time.Time `json:"checked,omitzero"`
+	Check   string    `json:"check,omitempty"`
+	// Qualified is the last time a check found the member qualifying. A lapsed
+	// account is deleted only once this, too, is delete_after old.
+	Qualified time.Time `json:"qualified,omitzero"`
+	// Elevated is when an admin made the account an admin with the admin
+	// command, and ElevatedBy which admin. Only such an account can the bot
+	// take admin from. Turning the account off ends it.
+	Elevated   time.Time `json:"elevated,omitzero"`
+	ElevatedBy string    `json:"elevated_by,omitempty"`
+}
+
+// turnedOn is a record whose account is an operator again, for a person a
+// check has just found qualifying.
+func (r *MemberRecord) turnedOn(now time.Time) {
+	r.Lapsed, r.FailedChecks, r.Qualified = time.Time{}, nil, now
 }
 
 // Suspension is an admin's.
@@ -137,4 +168,5 @@ const (
 	opSignup  = "signup"
 	opSuspend = "suspend"
 	opClaim   = "claim"
+	opElevate = "elevate"
 )

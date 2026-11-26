@@ -102,6 +102,12 @@ func (b *Bot) handlers() map[string]handler {
 		"lookup": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, _ UI) Message {
 			return a.Lookup(ctx, r, args)
 		}),
+		"admin": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, _ UI) Message {
+			return a.MakeAdmin(ctx, r, args)
+		}),
+		"unadmin": b.accounts(func(ctx context.Context, a *AccountsService, r Request, args []string, _ UI) Message {
+			return a.Unadmin(ctx, r, args)
+		}),
 	}
 }
 
@@ -131,6 +137,10 @@ func (b *Bot) Interact(ctx context.Context, it Interaction, ui UI) {
 		a.SuspendConfirm(ctx, it, ui)
 	case it.Action == "unsuspend-confirm":
 		a.UnsuspendConfirm(ctx, it, ui)
+	case it.Action == "admin-confirm":
+		a.MakeAdminConfirm(ctx, it, ui)
+	case it.Action == "unadmin-confirm":
+		a.UnadminConfirm(ctx, it, ui)
 	case it.Callback == "signup-name" || it.Callback == "signup-replace":
 		a.SignupSubmit(ctx, it, ui)
 	}

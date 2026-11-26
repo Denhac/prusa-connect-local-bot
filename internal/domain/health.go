@@ -54,6 +54,8 @@ type Health struct {
 	Notify     NotifyStatus `json:"notify"`
 	// Accounts says whether the account features are on, or why not.
 	Accounts string `json:"accounts,omitempty"`
+	// Sweep is what the membership sweep last did, while accounts are on.
+	Sweep string `json:"sweep,omitempty"`
 	// Missing names the settings the module still needs.
 	Missing []string `json:"missing,omitempty"`
 }
@@ -71,8 +73,13 @@ func BotStatus(ctx context.Context, health Health, fleet Fleet, now time.Time) M
 		{Label: "Slack", Value: slackLine(health.Slack, now)},
 		{Label: "Status messages", Value: notifyLine(health.Notify, now)},
 		{Label: "Accounts", Value: health.Accounts},
-		{Label: "Printers", Value: printersLine(ctx, fleet)},
 	}
+
+	if health.Sweep != "" {
+		fields = append(fields, Field{Label: "Membership sweep", Value: health.Sweep})
+	}
+
+	fields = append(fields, Field{Label: "Printers", Value: printersLine(ctx, fleet)})
 
 	if len(health.Missing) > 0 {
 		fields = append(fields, Field{Label: "Settings missing", Value: strings.Join(health.Missing, ", ")})
