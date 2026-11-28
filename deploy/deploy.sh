@@ -17,8 +17,10 @@
 # snapshot of its configuration, its databases (the accounts among them) and
 # every module's data directory, this bot's state file and audit log included.
 # It then copies that backup off the Pi as DIR/prusa-connect-<backup id>.tar.gz,
-# readable only by you: it holds password hashes. docs/operations.md says how
-# to restore one.
+# readable only by you. It holds the module settings in plain text, the Slack
+# tokens and the bot's server password among them, and the accounts' password
+# hashes: keep it only where admins alone can read it. docs/operations.md says
+# how to restore one.
 #
 # Environment:
 #   SSHPASS           the login password, when the host has no SSH key for you (needs sshpass)
@@ -132,7 +134,8 @@ backup() {
 	}
 	mv "$file.part" "$file"
 
-	echo "saved $file ($(du -h "$file" | cut -f1)), readable only by you: it holds password hashes."
+	echo "saved $file ($(du -h "$file" | cut -f1)), readable only by you."
+	echo "It holds the Slack tokens and the bot's server password in plain text: keep it where only admins can read it."
 	echo "The server keeps $id on the Pi too, with the last few. docs/operations.md says how to restore."
 }
 

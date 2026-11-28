@@ -93,7 +93,9 @@ The server writes more than the bot, mostly its access-control database
 ## Backups
 
 **The server makes its own backups.** Each one is a consistent snapshot of:
-- its configuration
+- its configuration, with every module's settings **in plain text**: the Slack
+  tokens and the `slackbot` password among them (the server keeps them so in
+  `config.d/resources.json`)
 - its databases, the local accounts and their password hashes among them
 - every module's data directory, this bot's `state.json` and `audit.log` included
 
@@ -109,8 +111,12 @@ mostly module releases, so make them by hand rather than on a schedule.
 
 A backup on the Pi protects against a bad update or a mistake, but not against a dead
 SD card. **Copy one off the Pi**, after any suspension, and before any server update.
-`deploy.sh backup` saves `prusa-connect-<backup id>.tar.gz`, readable only by you. It
-holds password hashes: keep it where only admins can read it.
+`deploy.sh backup` saves `prusa-connect-<backup id>.tar.gz`, readable only by you.
+**It is as sensitive as the credentials it holds:** whoever reads it can post as the bot
+in Slack and sign in to the printer server as an admin. Keep it only where admins alone
+can read it. The secrets cannot be cut out of a copy: the server's restore checks every
+file against the backup's checksums. If a copy is ever exposed, rotate the Slack tokens
+and the `slackbot` password ([Changing credentials](#changing-credentials)).
 
 ### Restore the whole server
 
